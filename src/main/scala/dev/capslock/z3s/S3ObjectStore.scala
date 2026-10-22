@@ -52,7 +52,10 @@ final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectS
 
   def getPrefix(key: String, length: Int): IO[Array[Byte]] =
     val req = GetObjectRequest.builder().bucket(bucket).key(key).range(s"bytes=0-${length - 1}").build()
-    call(client.getObject(req, AsyncResponseTransformer.toBytes[GetObjectResponse]())).map(_.asByteArray())
+    call(client.getObject(req, AsyncResponseTransformer.toBytes[GetObjectResponse]()))
+      .map(_.asByteArray())
+      // 空のオブジェクトにbytes=0-のrangeを指定すると416になる
+      .recover { case e if status(e).contains(416) => Array.emptyByteArray }
 
   def get(key: String): Stream[IO, Byte] =
     val req = GetObjectRequest.builder().bucket(bucket).key(key).build()

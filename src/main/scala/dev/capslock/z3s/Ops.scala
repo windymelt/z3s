@@ -48,18 +48,16 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
   // ---- reindex ----
 
   def reindex: IO[Index] =
-    for
-      entries <- store
-        .list(common.objectPrefix)
-        .parEvalMap(common.concurrency)(readEntry)
-        .unNone
-        .compile
-        .toList
-      index = Index(Index.SchemaVersion, entries.sortBy(_.header.createtxg))
-      _ <-
-        if common.dryRun then out(s"[dry-run] would write index with ${entries.size} entries to ${common.indexKey}")
-        else indexStore.update(_ => index).void
-    yield index
+    val scan = store
+      .list(common.objectPrefix)
+      .parEvalMap(common.concurrency)(readEntry)
+      .unNone
+      .compile
+      .toList
+      .map(entries => Index(Index.SchemaVersion, entries.sortBy(_.header.createtxg)))
+    if common.dryRun then
+      scan.flatTap(i => out(s"[dry-run] would write index with ${i.entries.size} entries to ${common.indexKey}"))
+    else indexStore.replace(scan)
 
   private def readEntry(o: ObjectInfo): IO[Option[IndexEntry]] =
     store.getPrefix(o.key, Frame.MaxFrameLength).flatMap { bytes =>
@@ -180,12 +178,12 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
     for
       index <- loadIndex
       chain <- Planner.restoreChain(index, snapshotName).liftTo[IO]
-      _ <- IO
-        .raiseError(Z3SError.Usage("--identity is required to restore age-encrypted objects"))
-        .whenA(opts.identities.isEmpty && chain.exists(e => isAge(e.header.mode)))
       exists <- zfs.datasetExists(target)
       targetLocals <- if exists then zfs.listSnapshots(target) else IO.pure(Nil)
       remaining = Planner.remainingToReceive(chain, targetLocals)
+      _ <- IO
+        .raiseError(Z3SError.Usage("--identity is required to restore age-encrypted objects"))
+        .whenA(opts.identities.isEmpty && remaining.exists(e => isAge(e.header.mode)))
       _ <-
         if remaining.isEmpty then out(s"$target already has $snapshotName")
         else
@@ -280,7 +278,7 @@ object StatusRow:
 
   def json(rows: List[StatusRow]): String =
     def row(w: Writer, r: StatusRow): Writer =
-      w.writeMapHeader(11)
+      w.writeMapStart()
       w.writeString("snapshot").writeString(r.h.snapshot)
       w.writeString("guid").writeString(showGuid(r.h.guid))
       w.writeString("parent")
@@ -299,10 +297,12 @@ object StatusRow:
       w.writeString("local").writeBoolean(r.local)
       w.writeString("estimatedSize").writeLong(r.h.estimatedSize)
       w.writeString("objectSize").writeLong(r.entry.size)
+      w.writeBreak()
 
     given io.bullet.borer.Encoder[List[StatusRow]] = io.bullet.borer.Encoder { (w, rs) =>
-      w.writeArrayHeader(rs.size)
+      // borerのJSON出力は長さ付きのarrayとmapに対応しないため、不定長で書く
+      w.writeArrayStart()
       rs.foreach(row(w, _))
-      w
+      w.writeBreak()
     }
     Json.encode(rows).toUtf8String

@@ -13,6 +13,26 @@ final class IndexStore(store: ObjectStore, val key: String):
         Cbor.decodeIndex(bytes).leftMap(Z3SError.Runtime(_)).liftTo[IO].map(i => Some((i, etag)))
     }
 
+  /** 現在のインデックスを読まずに置き換える。`build`の実行前に取得したETagを条件に書き込み、
+    * 412の場合は`build`からやり直す。壊れたインデックスも置き換えられる
+    */
+  def replace(build: IO[Index]): IO[Index] =
+    def attempt(n: Int): IO[Index] =
+      store.head(key).map(_.map(_.etag)).flatMap { before =>
+        build.flatMap { next =>
+          val bytes = Cbor.encodeIndex(next)
+          before.fold(store.putIfAbsent(key, bytes))(store.putIfMatch(key, bytes, _)).flatMap {
+            case PutResult.Written(_) => IO.pure(next)
+            case PutResult.PreconditionFailed if n < MaxAttempts =>
+              IO.consoleForIO.errorln(s"index was updated during reindex; rescanning ($n/$MaxAttempts)") *>
+                attempt(n + 1)
+            case PutResult.PreconditionFailed =>
+              IO.raiseError(Z3SError.Runtime(s"failed to replace index after $MaxAttempts attempts"))
+          }
+        }
+      }
+    attempt(1)
+
   /** 読んだ時点のETagを条件に書き込む。412の場合は読み直して`f`を適用し直す */
   def update(f: Index => Index): IO[Index] =
     def attempt(n: Int): IO[Index] =

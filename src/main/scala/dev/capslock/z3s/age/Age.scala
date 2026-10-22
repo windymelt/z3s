@@ -54,6 +54,9 @@ object Age:
         random.nextBytes(fileKey)
         val headerNoMac = Header.encodeWithoutMac(recipients.toList.map(wrap(_, fileKey, random)))
         val macLine = s" ${Primitives.base64Encode(headerMac(fileKey, headerNoMac))}\n".getBytes("US-ASCII")
+        // 復号側の上限を超えるヘッダは書かない。書くと復元できないバックアップになる
+        if headerNoMac.length + macLine.length > MaxHeaderSize then
+          throw AgeException(s"age header exceeds $MaxHeaderSize bytes (${recipients.size} recipients)")
         val nonce = new Array[Byte](NonceSize)
         random.nextBytes(nonce)
         (headerNoMac ++ macLine ++ nonce, Primitives.hkdf(fileKey, nonce, "payload"))

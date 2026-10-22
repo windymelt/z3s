@@ -95,8 +95,10 @@ aws s3api put-bucket-lifecycle-configuration --bucket my-backups --lifecycle-con
 ## テスト
 
 ```
-sbt test
+sbt testFull
 ```
+
+sbt 2の`test`は、変更の影響を受けるテストだけを実行します。すべてのテストを実行するには`testFull`を使ってください。
 
 S3 互換サーバに対する結合テストは、環境変数を設定したときだけ実行されます。sbt 2 はサーバプロセスの環境変数をテスト JVM に引き継ぐため、先に `sbt shutdown` で既存のサーバを止めてください。
 

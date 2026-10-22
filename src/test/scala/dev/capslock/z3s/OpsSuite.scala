@@ -230,3 +230,63 @@ class OpsSuite extends CatsEffectSuite:
       parts <- e.store.partSizes.get
     yield assertEquals(parts.dropRight(1).distinct, List(5 * 1024 * 1024))
   }
+
+  test("status --json renders empty and populated results") {
+    for
+      e <- env()
+      _ <- e.ops.backup(backupOpts(SendMode.Raw, full = true, Some("daily-1")))
+      _ <- e.ops.backup(backupOpts(SendMode.Raw, full = false))
+      index <- loadIndex(e.store)
+    yield
+      assertEquals(StatusRow.json(Nil), "[]")
+      val rows = index.entries.map(en => StatusRow(en, Health.Ok, local = true))
+      val json = StatusRow.json(rows)
+      assert(json.startsWith("[{\"snapshot\":\"tank/data@daily-1\""), json)
+      assertEquals("\"health\":\"ok\"".r.findAllMatchIn(json).size, 3)
+  }
+
+  test("reindex rescans when the index changes during the scan") {
+    for
+      e <- env()
+      _ <- e.ops.backup(backupOpts(SendMode.Raw, full = true, Some("daily-1")))
+      _ <- e.ops.backup(backupOpts(SendMode.Raw, full = false))
+      key = "backups/tank/data@daily-3"
+      obj <- e.store.objects.get.map(_(key))
+      entry <- loadIndex(e.store).map(_.entries.find(_.key == key).get)
+      _ <- e.store.objects.update(_ - key)
+      // スキャンの後、インデックスを書く直前に別プロセスがdaily-3をアップロードしたことにする
+      _ <- e.store.beforePut.set(Some(
+        e.store.objects.update(_.updated(key, obj)) *>
+          IndexStore(e.store, common().indexKey).update(_.upsert(entry)).void
+      ))
+      rebuilt <- e.ops.reindex
+      stored <- loadIndex(e.store)
+    yield
+      assertEquals(rebuilt.entries.map(_.key).last, key)
+      assertEquals(stored.entries.map(_.key), rebuilt.entries.map(_.key))
+  }
+
+  test("reindex replaces a malformed index") {
+    for
+      e <- env()
+      _ <- e.ops.backup(backupOpts(SendMode.Raw, full = true))
+      _ <- e.store.put(common().indexKey, Array[Byte](0x7f, 0x00))
+      rebuilt <- e.ops.reindex
+      stored <- loadIndex(e.store)
+    yield assertEquals(stored.entries.map(_.key), rebuilt.entries.map(_.key))
+  }
+
+  test("restore needs --identity only for encrypted objects that are still to be received") {
+    for
+      id <- X25519Identity.generate
+      e <- env()
+      encrypted = SendMode.Plain(Compression.None, Encryption.Age(NonEmptyList.one(id.recipient.encode)))
+      plain = SendMode.Plain(Compression.None, Encryption.None)
+      _ <- e.ops.backup(backupOpts(encrypted, full = true, Some("daily-1")))
+      _ <- e.ops.restore(restoreOpts("daily-1", "pool/r", Some(NonEmptyList.one(id))))
+      _ <- e.ops.backup(backupOpts(plain, full = false))
+      _ <- e.ops.restore(restoreOpts("daily-3", "pool/r"))
+      _ <- e.ops.restore(restoreOpts("daily-3", "pool/r"))
+      got <- e.zfs.received.get
+    yield assertEquals(got.size, 3)
+  }

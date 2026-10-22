@@ -95,8 +95,10 @@ aws s3api put-bucket-lifecycle-configuration --bucket my-backups --lifecycle-con
 ## Tests
 
 ```
-sbt test
+sbt testFull
 ```
+
+In sbt 2, `test` only reruns tests affected by changes. Use `testFull` to run every test.
 
 Integration tests against an S3-compatible server run only when the environment variables below are set. sbt 2 passes the environment of its server process to the test JVM, so stop any running server with `sbt shutdown` first.
 

@@ -104,6 +104,15 @@ class S3IntegrationSuite extends CatsEffectSuite:
     }
   }
 
+  test("range GET of an empty object returns no bytes") {
+    withStore { (_, store, _) =>
+      for
+        _ <- store.putIfAbsent("empty", Array.emptyByteArray)
+        got <- store.getPrefix("empty", 100)
+      yield assertEquals(got.length, 0)
+    }
+  }
+
   test("backup, reindex and restore against S3") {
     withStore { (_, store, bucket) =>
       val snapshots = List(Snapshot("tank/data@a", 1, 10), Snapshot("tank/data@b", 2, 20))

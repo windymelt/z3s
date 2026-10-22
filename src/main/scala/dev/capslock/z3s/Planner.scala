@@ -1,5 +1,8 @@
 package dev.capslock.z3s
 
+import scala.annotation.tailrec
+import scala.collection.mutable
+
 /** 1つのバックアップオブジェクトとして送る差分。parentがNoneならfull */
 final case class SendStep(parent: Option[Snapshot], child: Snapshot)
 
@@ -35,22 +38,43 @@ object Planner:
   /** entryごとの健全性。キーはオブジェクトのキー */
   def health(index: Index): Map[String, Health] =
     val byGuid = index.entries.groupBy(_.header.guid).view.mapValues(_.head).toMap
+    val memo = mutable.Map.empty[String, Health]
 
-    def check(e: IndexEntry, visited: Set[Long]): Health =
-      e.header.parent match
-        case None => Health.Ok
-        case Some(p) if visited.contains(p.guid) => Health.Cycle
-        case Some(p) =>
-          byGuid.get(p.guid) match
-            case None => Health.MissingParent
-            case Some(pe) if pe.header.mode.kind != e.header.mode.kind => Health.ModeMismatch
-            case Some(pe) =>
-              check(pe, visited + p.guid) match
-                case Health.Ok    => Health.Ok
-                case Health.Cycle => Health.Cycle
-                case _            => Health.ParentBroken
+    // 子の健全性は親の判定結果から決まる
+    def fromParent(parent: Health): Health = parent match
+      case Health.Ok    => Health.Ok
+      case Health.Cycle => Health.Cycle
+      case _            => Health.ParentBroken
 
-    index.entries.map(e => e.key -> check(e, Set(e.header.guid))).toMap
+    // 判定済みのentry、full、または異常のあるentryに着くまで親を辿り、通った経路に結果を書き戻す
+    def resolve(start: IndexEntry): Unit =
+      val path = mutable.ArrayBuffer.empty[IndexEntry]
+      val onPath = mutable.Set.empty[Long]
+      var current = start
+      var last: Option[Health] = None
+      while last.isEmpty do
+        memo.get(current.key) match
+          case Some(h) => last = Some(fromParent(h))
+          case None =>
+            path += current
+            onPath += current.header.guid
+            current.header.parent match
+              case None                               => last = Some(Health.Ok)
+              case Some(p) if onPath.contains(p.guid) => last = Some(Health.Cycle)
+              case Some(p) =>
+                byGuid.get(p.guid) match
+                  case None                                                        => last = Some(Health.MissingParent)
+                  case Some(pe) if pe.header.mode.kind != current.header.mode.kind => last = Some(Health.ModeMismatch)
+                  case Some(pe)                                                    => current = pe
+      // memoに当たった場合、lastは経路の末尾のentryの健全性になっている
+      var h = last.get
+      path.reverseIterator.foreach { e =>
+        memo(e.key) = h
+        h = fromParent(h)
+      }
+
+    index.entries.foreach(e => if !memo.contains(e.key) then resolve(e))
+    memo.toMap
 
   def planBackup(
       locals: List[Snapshot],
@@ -89,7 +113,7 @@ object Planner:
   def restoreChain(index: Index, snapshot: String): Either[Z3SError, List[IndexEntry]] =
     val byGuid = index.entries.groupBy(_.header.guid).view.mapValues(_.head).toMap
 
-    def loop(e: IndexEntry, acc: List[IndexEntry], visited: Set[Long]): Either[Z3SError, List[IndexEntry]] =
+    @tailrec def loop(e: IndexEntry, acc: List[IndexEntry], visited: Set[Long]): Either[Z3SError, List[IndexEntry]] =
       e.header.parent match
         case None => Right(e :: acc)
         case Some(p) if visited.contains(p.guid) =>

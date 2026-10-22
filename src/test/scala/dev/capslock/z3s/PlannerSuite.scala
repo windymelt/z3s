@@ -126,3 +126,15 @@ class PlannerSuite extends FunSuite:
     assertEquals(Planner.restoreChain(Index(1, List(entry(b, Some(a)))), b.name).left.map(_.exitCode), Left(3))
     assertEquals(Planner.restoreChain(index, "tank/data@nope").left.map(_.exitCode), Left(1))
   }
+
+  test("health of a long chain is computed without revisiting ancestors") {
+    val chain = (1 to 20000).map(i => snap(s"s$i", i.toLong, i.toLong)).toList
+    val entries = chain.zip(None :: chain.map(Some(_))).map((s, p) => entry(s, p))
+    // 途中の1件の親を欠落させると、それ以降はすべてparent brokenになる
+    val broken = entries.updated(10000, entry(chain(10000), Some(snap("gone", 999999, 0))))
+    val health = Planner.health(Index(1, broken))
+    assertEquals(health(chain(9999).name), Health.Ok)
+    assertEquals(health(chain(10000).name), Health.MissingParent)
+    assertEquals(health(chain.last.name), Health.ParentBroken)
+    assertEquals(Planner.restoreChain(Index(1, entries), chain.last.name).map(_.size), Right(20000))
+  }

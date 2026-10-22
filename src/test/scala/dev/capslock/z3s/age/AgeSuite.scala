@@ -245,3 +245,16 @@ class AgeSuite extends CatsEffectSuite:
       val ba = Primitives.x25519(b.secretKey.bytes, a.recipient.publicKey.bytes)
       assertEquals(ab.map(_.toList), ba.map(_.toList))
   }
+
+  test("encryption fails when the header would exceed the size that decryption accepts") {
+    for
+      ids <- List.fill(700)(X25519Identity.generate).sequence
+      r <- fs2.Stream
+        .emits("hello".getBytes)
+        .covary[IO]
+        .through(Age.encrypt(NonEmptyList.fromListUnsafe(ids.map(_.recipient))))
+        .compile
+        .drain
+        .attempt
+    yield assert(r.left.exists(_.isInstanceOf[AgeException]), r.toString)
+  }
