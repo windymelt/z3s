@@ -102,7 +102,7 @@ Integration tests against an S3-compatible server run only when the environment 
 
 ```
 sbt shutdown
-Z3S_IT_ENDPOINT=http://127.0.0.1:9000 Z3S_IT_ACCESS_KEY=... Z3S_IT_SECRET_KEY=... sbt "testOnly z3s.S3IntegrationSuite"
+Z3S_IT_ENDPOINT=http://127.0.0.1:9000 Z3S_IT_ACCESS_KEY=... Z3S_IT_SECRET_KEY=... sbt "testOnly dev.capslock.z3s.S3IntegrationSuite"
 ```
 
 Interoperability tests with the reference age implementation use `AGE_BIN` and `AGE_KEYGEN_BIN`, or `age` and `age-keygen` on `PATH`. They are skipped if neither is found.

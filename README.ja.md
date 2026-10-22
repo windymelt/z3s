@@ -102,7 +102,7 @@ S3 互換サーバに対する結合テストは、環境変数を設定した�
 
 ```
 sbt shutdown
-Z3S_IT_ENDPOINT=http://127.0.0.1:9000 Z3S_IT_ACCESS_KEY=... Z3S_IT_SECRET_KEY=... sbt "testOnly z3s.S3IntegrationSuite"
+Z3S_IT_ENDPOINT=http://127.0.0.1:9000 Z3S_IT_ACCESS_KEY=... Z3S_IT_SECRET_KEY=... sbt "testOnly dev.capslock.z3s.S3IntegrationSuite"
 ```
 
 公式の age との相互運用テストは、`AGE_BIN` と `AGE_KEYGEN_BIN`、または `PATH` 上の `age` と `age-keygen` を使います。見つからない場合は skip します。

@@ -3,6 +3,7 @@ val scala3Version = "3.10.0"
 lazy val root = project
   .in(file("."))
   .settings(
+    organization := "dev.capslock",
     name := "z3s",
     version := "0.1.0-SNAPSHOT",
     scalaVersion := scala3Version,
@@ -23,10 +24,10 @@ lazy val root = project
       "org.typelevel" %% "munit-cats-effect" % "2.2.1" % Test
     ),
     Compile / sourceGenerators += Def.task {
-      val file = (Compile / sourceManaged).value / "z3s" / "BuildInfo.scala"
+      val file = (Compile / sourceManaged).value / "dev" / "capslock" / "z3s" / "BuildInfo.scala"
       IO.write(
         file,
-        s"""package z3s
+        s"""package dev.capslock.z3s
            |
            |object BuildInfo:
            |  val version: String = "${version.value}"
@@ -40,7 +41,7 @@ lazy val root = project
     run / javaOptions += "--enable-native-access=ALL-UNNAMED",
     run / fork := true,
     run / connectInput := true,
-    assembly / mainClass := Some("z3s.Main"),
+    assembly / mainClass := Some("dev.capslock.z3s.Main"),
     assembly / assemblyJarName := "z3s.jar",
     assembly / packageOptions += Package.ManifestAttributes("Enable-Native-Access" -> "ALL-UNNAMED"),
     assembly / assemblyMergeStrategy := {
