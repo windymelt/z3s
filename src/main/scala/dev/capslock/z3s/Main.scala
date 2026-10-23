@@ -84,7 +84,7 @@ object Cli:
     (
       Opts.argument[String]("SNAPSHOT"),
       Opts.option[String]("target", "Dataset to receive into. Defaults to --dataset.").orNone,
-      Opts.flag("force", "Use zfs recv -F.").orFalse,
+      Opts.flag("force", "Use zfs recv -F.", short = "F").orFalse,
       Opts.option[Path]("identity", "age identity file (AGE-SECRET-KEY-1...).").orNone
     ).mapN(Cmd.Restore.apply)
 
