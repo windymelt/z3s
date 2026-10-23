@@ -30,7 +30,10 @@ object Cli:
       Opts
         .option[Int]("concurrency", "Number of parallel S3 requests (default 4).")
         .withDefault(4)
-        .validate("--concurrency must be positive")(_ > 0)
+        .validate("--concurrency must be positive")(_ > 0),
+      withEnv[String]("progress", "Z3S_PROGRESS", "auto, bar, log or none (default auto).")
+        .withDefault("auto")
+        .mapValidated(ProgressMode.parse(_).toValidatedNel)
     ).mapN(Common.apply)
 
   val connection: Opts[Connection] =

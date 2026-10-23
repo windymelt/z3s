@@ -32,6 +32,7 @@ Common options go after the subcommand. Command-line arguments take precedence o
 | `--region` | `AWS_REGION` | Region |
 | `--endpoint` | `Z3S_ENDPOINT` | Endpoint of S3-compatible storage. When set, z3s uses path-style access and sends checksums only when required |
 | `--concurrency` | | Number of parallel S3 requests. Defaults to 4 |
+| `--progress` | `Z3S_PROGRESS` | `auto`, `bar`, `log` or `none`. Defaults to `auto` |
 | `--dry-run` | | Print the commands and the plan without writing to S3 or running `zfs recv` |
 
 ```
@@ -60,6 +61,8 @@ z3s reindex --bucket my-backups --dataset tank/data
 - `--compress` defaults to `zstd:3`. Accepted values are `none`, `gzip[:1-9]`, `zstd[:1-19]`, `xz[:0-9]` and `bzip2[:1-9]`.
 - z3s refuses an incremental whose parent was sent in a different send mode (raw or plain). Compression and encryption may differ between objects.
 - `restore` starts receiving after the latest snapshot in the chain that the target already has (matched by guid). `--force` uses `zfs recv -F`.
+
+Progress is printed to standard error. `backup` counts the bytes that `zfs send` has written against the estimate from `zfs send -nvP`, before compression and encryption. `restore` counts the bytes downloaded from S3 against the object size. `bar` rewrites a single line, and `log` prints one line at every 10% step or every 60 seconds. `auto` uses `bar` when the console is a terminal and `log` otherwise. If the stream grows beyond the estimate, the percentage stops at 99.9% and the final line shows the actual size.
 
 Exit codes: 0 (success), 1 (runtime error), 2 (usage error), 3 (aborted by a health check).
 

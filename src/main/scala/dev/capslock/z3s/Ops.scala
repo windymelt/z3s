@@ -17,7 +17,8 @@ final case class Common(
     dataset: String,
     snapshotPrefix: Option[String],
     dryRun: Boolean,
-    concurrency: Int
+    concurrency: Int,
+    progress: ProgressMode = ProgressMode.None
 ):
   def objectKey(snapshotName: String): String = s"$prefix$snapshotName"
   def objectPrefix: String = s"$prefix$dataset@"
@@ -39,6 +40,7 @@ final case class RestoreOptions(
 
 final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
   private val indexStore = IndexStore(store, common.indexKey)
+  private val progress = Progress(ProgressMode.resolve(common.progress))
   private def out(s: String): IO[Unit] = IO.println(s)
   private def err(s: String): IO[Unit] = IO.consoleForIO.errorln(s)
   private def now: IO[Instant] = Clock[IO].realTimeInstant
@@ -92,10 +94,10 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
         case BackupPlan.UpToDate(s) => out(s"${s.name} is already backed up")
         case BackupPlan.Steps(steps) =>
           out(s"plan: ${steps.size} object(s) in ${opts.mode.kind.label} mode") *>
-            steps.traverse_(sendOne(_, opts))
+            steps.zipWithIndex.traverse_((s, i) => sendOne(s, opts, s"[${i + 1}/${steps.size}]"))
     yield ()
 
-  private def sendOne(step: SendStep, opts: BackupOptions): IO[Unit] =
+  private def sendOne(step: SendStep, opts: BackupOptions, position: String): IO[Unit] =
     val raw = opts.mode == SendMode.Raw
     val parentName = step.parent.map(_.name)
     val key = common.objectKey(step.child.name)
@@ -118,7 +120,9 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
           s"estimated $estimated bytes, part size $partSize, key $key"
       )
       _ <- out(s"  ${ZfsCommands.show(ZfsCommands.send(step.child.name, parentName, raw))}")
-      _ <- if common.dryRun then IO.unit else upload(key, header, parentName, partSize, opts)
+      _ <-
+        if common.dryRun then IO.unit
+        else upload(key, header, parentName, partSize, opts, s"$position ${step.child.name}")
     yield ()
 
   private def upload(
@@ -126,13 +130,15 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
       header: Header,
       parentName: Option[String],
       partSize: Long,
-      opts: BackupOptions
+      opts: BackupOptions,
+      label: String
   ): IO[Unit] =
     val headerBytes = Cbor.encodeHeader(header)
     val frame = Frame.encode(Frame(Frame.CurrentVersion, ByteVector(headerBytes)))
     val metadata = Map("z3s-format" -> Frame.CurrentVersion.toString) ++ parentName.map("z3s-parent" -> _)
     val raw = opts.mode == SendMode.Raw
-    val send = zfs.send(header.snapshot, parentName, raw)
+    // 見積もりはzfs sendの出力サイズなので、圧縮・暗号化の前のバイト数で進捗を数える
+    val send = zfs.send(header.snapshot, parentName, raw).through(progress.track(label, Some(header.estimatedSize)))
     for
       _ <- IO
         .raiseError(Z3SError.Runtime(s"header is too large: ${headerBytes.length} bytes"))
@@ -188,19 +194,25 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
         if remaining.isEmpty then out(s"$target already has $snapshotName")
         else
           out(s"plan: receive ${remaining.size} object(s) into $target") *>
-            remaining.traverse_(receiveOne(_, target, opts))
+            remaining.zipWithIndex.traverse_((e, i) => receiveOne(e, target, opts, s"[${i + 1}/${remaining.size}]"))
     yield ()
 
   private def isAge(mode: SendMode): Boolean = mode match
     case SendMode.Plain(_, Encryption.Age(_)) => true
     case _                                    => false
 
-  private def receiveOne(entry: IndexEntry, target: String, opts: RestoreOptions): IO[Unit] =
+  private def receiveOne(entry: IndexEntry, target: String, opts: RestoreOptions, position: String): IO[Unit] =
     val describe = s"${entry.key} | ${ZfsCommands.show(ZfsCommands.recv(target, opts.force))}"
     if common.dryRun then out(s"[dry-run] $describe")
     else
       out(describe) *>
-        zfs.recv(target, opts.force, Frame.split(store.get(entry.key))(decodePayload(entry, opts)))
+        zfs.recv(
+          target,
+          opts.force,
+          Frame.split(
+            store.get(entry.key).through(progress.track(s"$position ${entry.header.snapshot}", Some(entry.size)))
+          )(decodePayload(entry, opts))
+        )
 
   private def decodePayload(entry: IndexEntry, opts: RestoreOptions)(
       frame: Frame,
