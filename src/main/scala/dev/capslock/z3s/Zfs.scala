@@ -32,6 +32,15 @@ object ZfsCommands:
 
   def show(args: List[String]): String = ("zfs" :: args).mkString(" ")
 
+  /** zfs recvが失敗したときに考えられる原因 */
+  def recvHints(force: Boolean): List[String] =
+    val open = "is the target dataset open? zfs recv fails if a shell or process is using files in it."
+    // -Fは受信前に最新のスナップショットへロールバックするため、変更は失敗の原因にならない
+    val modified =
+      "has the target dataset been modified since its latest snapshot? " +
+        "--force rolls it back to that snapshot before receiving, which discards the changes."
+    if force then List(open) else List(open, modified)
+
   def parseList(out: String): Either[String, List[Snapshot]] =
     out.linesIterator.filter(_.nonEmpty).toList.traverse { line =>
       line.split("\t") match
@@ -97,6 +106,11 @@ final class ProcessZfs(command: String = "zfs") extends Zfs:
 
   def recv(target: String, force: Boolean, input: Stream[IO, Byte]): IO[Unit] =
     val args = ZfsCommands.recv(target, force)
+    def recvFailed(code: Int): Z3SError =
+      Z3SError.Runtime(
+        (s"`${ZfsCommands.show(args)}` exited with $code" :: ZfsCommands.recvHints(force).map("hint: " + _))
+          .mkString("\n")
+      )
     ProcessBuilder(command, args)
       .withStdout(Redirect.Inherit)
       .withStderr(Redirect.Inherit)
@@ -104,12 +118,12 @@ final class ProcessZfs(command: String = "zfs") extends Zfs:
       .use { p =>
         input.through(p.stdin).compile.drain.attempt.flatMap {
           case Right(()) =>
-            p.exitValue.flatMap(code => IO.raiseError(failed(args, code, "")).whenA(code != 0))
+            p.exitValue.flatMap(code => IO.raiseError(recvFailed(code)).whenA(code != 0))
           case Left(e) =>
             // zfs recvが先に異常終了した場合は書き込みエラーより終了コードを報告する
             p.isAlive.flatMap {
               case false =>
-                p.exitValue.flatMap(code => IO.raiseError(if code != 0 then failed(args, code, "") else e))
+                p.exitValue.flatMap(code => IO.raiseError(if code != 0 then recvFailed(code) else e))
               case true => IO.raiseError(e)
             }
         }
