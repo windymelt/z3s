@@ -8,15 +8,15 @@ import org.scalatest.matchers.should.Matchers
 
 /** 等価比較は型を検査する`should ===`で書く */
 trait SpecMatchers
-    extends Matchers
-    with TypeCheckedTripleEquals
-    with EitherValues
-    with OptionValues
-    with Inspectors
-    with Inside
+    extends Matchers,
+      TypeCheckedTripleEquals,
+      EitherValues,
+      OptionValues,
+      Inspectors,
+      Inside
 
 /** 同期的なテスト */
-trait UnitSpec extends AnyFunSuite with SpecMatchers
+trait UnitSpec extends AnyFunSuite, SpecMatchers
 
 /** `IO[Assertion]`を返すテスト */
-trait IOSpec extends AsyncFunSuite with AsyncIOSpec with SpecMatchers
+trait IOSpec extends AsyncFunSuite, AsyncIOSpec, SpecMatchers
