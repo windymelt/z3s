@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [21, 25]
+    env:
+      # 結合テストで使う外部ツールのバージョン。手元で検証したものに合わせている
+      MINIO_VERSION: v0.0.0-20260212201848-7aac2a2c5b7c
+      AGE_VERSION: v1.2.1
+      TOOLS_DIR: /home/runner/.cache/z3s-ci-tools
+      Z3S_IT_ENDPOINT: http://127.0.0.1:9000
+      Z3S_IT_ACCESS_KEY: minioadmin
+      Z3S_IT_SECRET_KEY: minioadmin
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: sbt
+
+      - uses: sbt/setup-sbt@v1
+
+      # Docker HubにMinIOのイメージがなく、Quayからの取得も手元では拒否されたため、ソースからビルドする
+      - name: Restore test tools
+        id: tools
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TOOLS_DIR }}
+          key: tools-minio-${{ env.MINIO_VERSION }}-age-${{ env.AGE_VERSION }}
+
+      - uses: actions/setup-go@v6
+        if: steps.tools.outputs.cache-hit != 'true'
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Build MinIO and age
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: |
+          GOBIN="$TOOLS_DIR" go install "github.com/minio/minio@$MINIO_VERSION"
+          GOBIN="$TOOLS_DIR" go install "filippo.io/age/cmd/...@$AGE_VERSION"
+
+      - name: Start MinIO
+        run: |
+          mkdir -p "$RUNNER_TEMP/minio-data"
+          MINIO_ROOT_USER="$Z3S_IT_ACCESS_KEY" MINIO_ROOT_PASSWORD="$Z3S_IT_SECRET_KEY" \
+            nohup "$TOOLS_DIR/minio" server "$RUNNER_TEMP/minio-data" --address 127.0.0.1:9000 \
+            > "$RUNNER_TEMP/minio.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/minio.log"
+          exit 1
+
+      - name: Test and build the jar
+        env:
+          AGE_BIN: ${{ env.TOOLS_DIR }}/age
+          AGE_KEYGEN_BIN: ${{ env.TOOLS_DIR }}/age-keygen
+        run: sbt -batch "testFull; assembly"
