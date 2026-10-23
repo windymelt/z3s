@@ -4,12 +4,11 @@ import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all.*
 import java.io.{BufferedInputStream, ByteArrayOutputStream}
 import java.net.{ServerSocket, Socket, URI}
-import munit.CatsEffectSuite
 import software.amazon.awssdk.core.async.AsyncRequestBody
 import software.amazon.awssdk.services.s3.model.UploadPartRequest
 
 /** クライアントがUploadPartにExpect: 100-continueを付けないことを確かめる */
-class ExpectContinueSuite extends CatsEffectSuite:
+class ExpectContinueSuite extends IOSpec:
   /** 受け取ったリクエストのヘッダを記録し、200を返す */
   private def handle(socket: Socket, received: Ref[IO, List[List[String]]]): Unit =
     val in = BufferedInputStream(socket.getInputStream)
@@ -65,7 +64,7 @@ class ExpectContinueSuite extends CatsEffectSuite:
         }
       requests <- received.get
     yield
-      assertEquals(etag, "\"abc\"")
-      assertEquals(requests.size, 1)
-      assert(!requests.head.exists(_.startsWith("expect:")), requests.head.mkString("\n"))
+      etag should === ("\"abc\"")
+      requests should have size 1
+      forAll(requests.head)(_ should not startWith "expect:")
   }

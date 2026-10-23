@@ -20,8 +20,8 @@ lazy val root = project
       "com.github.luben" % "zstd-jni" % "1.5.7-24",
       "org.tukaani" % "xz" % "1.12",
       "org.apache.commons" % "commons-compress" % "1.28.0",
-      "org.scalameta" %% "munit" % "1.3.6" % Test,
-      "org.typelevel" %% "munit-cats-effect" % "2.2.1" % Test,
+      "org.scalatest" %% "scalatest" % "3.2.20" % Test,
+      "org.typelevel" %% "cats-effect-testing-scalatest" % "1.8.0" % Test,
       "org.typelevel" %% "cats-effect-testkit" % "3.7.1" % Test
     ),
     Compile / sourceGenerators += Def.task {
