@@ -89,6 +89,29 @@ final class MultipartUploader(
         lock <- Mutex[IO]
         record = (part: PartRecord) =>
           states.traverse_(st => lock.lock.surround(state.updateAndGet(_.record(part)).flatMap(st.save)))
+
+        // 作り直したパートが記録したMD5と一致し、S3上のパートとサイズも一致すれば、送らずにS3上のパートを使う
+        reuse = (number: Int, bytes: Array[Byte], md5: String, r: PartRecord, p: UploadedPart) =>
+          if r.md5 == md5 && r.size == bytes.length && p.size == bytes.length then counters.finished.as(p)
+          else
+            IO.raiseError(
+              Z3SError.Unresumable(
+                s"part $number of $key differs from the interrupted upload; run the backup again to start over"
+              )
+            )
+
+        send = (number: Int, bytes: Array[Byte], md5: String) =>
+          (counters.started *> uploadWithRetry(s0, number, bytes).guarantee(counters.stopped)).flatMap { etag =>
+            record(PartRecord(number, md5, bytes.length.toLong)) *>
+              counters.finished.as(UploadedPart(number, etag, bytes.length.toLong))
+          }
+
+        processPart = (number: Int, bytes: Array[Byte]) =>
+          val md5 = ByteVector(MessageDigest.getInstance("MD5").digest(bytes)).toHex
+          (recorded.get(number), onS3.get(number)) match
+            case (Some(r), Some(p)) => reuse(number, bytes, md5, r, p)
+            case _                  => send(number, bytes, md5)
+
         parts <- data
           .chunkN(partSize, allowFewer = true)
           .zipWithIndex
@@ -96,26 +119,7 @@ final class MultipartUploader(
             IO.raiseError(Z3SError.Unresumable(s"part count exceeds $MaxParts; the size estimate was too small"))
               .whenA(i >= MaxParts)
           }
-          .parEvalMap(concurrency) { case (chunk, i) =>
-            val number = i.toInt + 1
-            val bytes = chunk.toArray
-            val md5 = ByteVector(MessageDigest.getInstance("MD5").digest(bytes)).toHex
-            (recorded.get(number), onS3.get(number)) match
-              // 作り直したパートが記録したMD5と一致し、S3上のパートとサイズも一致すれば、送らずにS3上のパートを使う
-              case (Some(r), Some(p)) =>
-                if r.md5 == md5 && r.size == bytes.length && p.size == bytes.length then counters.finished.as(p)
-                else
-                  IO.raiseError(
-                    Z3SError.Unresumable(
-                      s"part $number of $key differs from the interrupted upload; run the backup again to start over"
-                    )
-                  )
-              case _ =>
-                (counters.started *> uploadWithRetry(s0, number, bytes).guarantee(counters.stopped)).flatMap { etag =>
-                  record(PartRecord(number, md5, bytes.length.toLong)) *>
-                    counters.finished.as(UploadedPart(number, etag, bytes.length.toLong))
-                }
-          }
+          .parEvalMap(concurrency) { case (chunk, i) => processPart(i.toInt + 1, chunk.toArray) }
           .compile
           .toList
         etag <- store.completeMultipartUpload(key, s0.uploadId, parts)
