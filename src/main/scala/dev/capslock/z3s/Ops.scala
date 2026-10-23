@@ -256,7 +256,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
       locals <- if exists then zfs.listSnapshots(common.dataset) else IO.pure(Nil)
       health = Planner.health(index)
       localGuids = locals.map(_.guid).toSet
-      rows = index.entries.sortBy(_.header.createtxg).map { e =>
+      rows = StatusRow.backupOrder(index.entries).map { e =>
         StatusRow(e, health(e.key), localGuids.contains(e.header.guid))
       }
       _ <- if json then out(StatusRow.json(rows)) else out(StatusRow.table(rows))
@@ -270,6 +270,12 @@ final case class StatusRow(entry: IndexEntry, health: Health, local: Boolean):
     case SendMode.Plain(c, e) => s"plain(${c.label}, ${e.label})"
 
 object StatusRow:
+  /** バックアップの開始時刻順に並べる。開始時刻が同じならcreatetxg順、解釈できない開始時刻は末尾に置く */
+  def backupOrder(entries: List[IndexEntry]): List[IndexEntry] =
+    // createdAtは小数秒の桁数が一定でないため、文字列ではなくInstantとして比べる
+    def startedAt(e: IndexEntry): Option[Instant] = scala.util.Try(Instant.parse(e.header.createdAt)).toOption
+    entries.sortBy(e => (startedAt(e).isEmpty, startedAt(e).getOrElse(Instant.EPOCH), e.header.createtxg))
+
   def table(rows: List[StatusRow]): String =
     val header = List("SNAPSHOT", "PARENT", "KIND", "MODE", "HEALTH", "LOCAL", "ESTIMATED", "SIZE")
     val body = rows.map(r =>

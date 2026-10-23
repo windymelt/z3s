@@ -290,3 +290,21 @@ class OpsSuite extends CatsEffectSuite:
       got <- e.zfs.received.get
     yield assertEquals(got.size, 3)
   }
+
+  test("status lists entries in the order they were backed up") {
+    def entry(name: String, txg: Long, createdAt: String) =
+      IndexEntry(name, Header(name, txg, txg, None, SendMode.Raw, 0, createdAt, ""), 0, "", "")
+    val entries = List(
+      entry("old-snapshot-backed-up-last", 10, "2026-10-23T03:00:00Z"),
+      entry("unparsable", 5, "not a time"),
+      entry("same-time-later-txg", 30, "2026-10-23T01:00:00Z"),
+      entry("same-time-earlier-txg", 20, "2026-10-23T01:00:00Z"),
+      // 小数秒付きの表記は文字列比較では "Z" より前に並ぶが、時刻としては後
+      entry("fraction", 40, "2026-10-23T01:00:00.500Z"),
+      entry("first", 50, "2026-10-23T00:00:00Z")
+    )
+    assertEquals(
+      StatusRow.backupOrder(entries).map(_.key),
+      List("first", "same-time-earlier-txg", "same-time-later-txg", "fraction", "old-snapshot-backed-up-last", "unparsable")
+    )
+  }
