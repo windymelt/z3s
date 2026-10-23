@@ -3,7 +3,7 @@ package dev.capslock.z3s
 import cats.effect.{IO, Ref, Resource}
 import fs2.{Chunk, Stream}
 import java.net.URI
-import munit.CatsEffectSuite
+import scodec.bits.ByteVector
 import scala.jdk.CollectionConverters.*
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
 import software.amazon.awssdk.regions.Region
@@ -14,8 +14,7 @@ import software.amazon.awssdk.services.s3.model.{CreateBucketRequest, ListMultip
   *
   * Z3S_IT_ENDPOINT=http://127.0.0.1:9000 Z3S_IT_ACCESS_KEY=... Z3S_IT_SECRET_KEY=... sbt "testOnly dev.capslock.z3s.S3IntegrationSuite"
   */
-class S3IntegrationSuite extends CatsEffectSuite:
-  override def munitIOTimeout = scala.concurrent.duration.Duration(5, "min")
+class S3IntegrationSuite extends IOSpec:
 
   val endpoint = sys.env.get("Z3S_IT_ENDPOINT")
 
@@ -52,19 +51,19 @@ class S3IntegrationSuite extends CatsEffectSuite:
   test("conditional PUT") {
     withStore { (_, store, _) =>
       for
-        a <- store.putIfAbsent("k", Array[Byte](1))
-        b <- store.putIfAbsent("k", Array[Byte](2))
-        etag = a match { case PutResult.Written(e) => e; case _ => fail("not written") }
-        c <- store.putIfMatch("k", Array[Byte](3), "\"0123456789abcdef0123456789abcdef\"")
-        d <- store.putIfMatch("k", Array[Byte](4), etag)
+        created <- store.putIfAbsent("k", Array[Byte](1))
+        recreated <- store.putIfAbsent("k", Array[Byte](2))
+        etag = created match { case PutResult.Written(e) => e; case _ => fail("not written") }
+        staleWrite <- store.putIfMatch("k", Array[Byte](3), "\"0123456789abcdef0123456789abcdef\"")
+        matchedWrite <- store.putIfMatch("k", Array[Byte](4), etag)
         got <- store.getWithEtag("k")
         missing <- store.getWithEtag("nope")
       yield
-        assertEquals(b, PutResult.PreconditionFailed)
-        assertEquals(c, PutResult.PreconditionFailed)
-        assert(d.isInstanceOf[PutResult.Written])
-        assertEquals(got.map(_._1.toList), Some(List[Byte](4)))
-        assertEquals(missing, None)
+        recreated should === (PutResult.PreconditionFailed)
+        staleWrite should === (PutResult.PreconditionFailed)
+        matchedWrite shouldBe a[PutResult.Written]
+        got.map(_._1.toList) should === (Some(List[Byte](4)))
+        missing should === (None)
     }
   }
 
@@ -80,13 +79,13 @@ class S3IntegrationSuite extends CatsEffectSuite:
         again <- store.uploadMultipart("obj", Map.empty, None, 5 * 1024 * 1024, 2, src).attempt
         pending <- pendingUploads(c, bucket)
       yield
-        assertEquals(r.size, data.length.toLong)
-        assertEquals(head.map(_.size), Some(data.length.toLong))
-        assertEquals(prefix.toList, data.take(100).toList)
-        assert(java.util.Arrays.equals(whole, data))
-        assertEquals(listed.map(_.key), List("obj"))
-        assert(again.left.exists(_.getMessage.contains("already exists")), again.toString)
-        assertEquals(pending, 0)
+        r.size should === (data.length.toLong)
+        head.map(_.size) should === (Some(data.length.toLong))
+        prefix.toList should === (data.take(100).toList)
+        ByteVector(whole) should === (ByteVector(data))
+        listed.map(_.key) should === (List("obj"))
+        again.left.value.getMessage should include("already exists")
+        pending should === (0)
     }
   }
 
@@ -98,9 +97,9 @@ class S3IntegrationSuite extends CatsEffectSuite:
         head <- store.head("obj")
         pending <- pendingUploads(c, bucket)
       yield
-        assert(r.isLeft)
-        assertEquals(head, None)
-        assertEquals(pending, 0)
+        r.left.value.getMessage should === ("boom")
+        head should === (None)
+        pending should === (0)
     }
   }
 
@@ -109,7 +108,7 @@ class S3IntegrationSuite extends CatsEffectSuite:
       for
         _ <- store.putIfAbsent("empty", Array.emptyByteArray)
         got <- store.getPrefix("empty", 100)
-      yield assertEquals(got.length, 0)
+      yield got.length should === (0)
     }
   }
 
@@ -127,8 +126,8 @@ class S3IntegrationSuite extends CatsEffectSuite:
         _ <- ops.restore(RestoreOptions("b", Some("pool/r"), force = false, None))
         got <- zfs.received.get
       yield
-        assertEquals(index.entries.map(_.key), List("p/tank/data@a", "p/tank/data@b"))
-        assertEquals(got.map(_._2.toList), List(
+        index.entries.map(_.key) should === (List("p/tank/data@a", "p/tank/data@b"))
+        got.map(_._2.toList) should === (List(
           zfs.streamFor(snapshots(0), None, false).toList,
           zfs.streamFor(snapshots(1), Some("tank/data@a"), false).toList
         ))

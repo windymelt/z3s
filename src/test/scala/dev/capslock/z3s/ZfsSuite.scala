@@ -3,10 +3,9 @@ package dev.capslock.z3s
 import cats.effect.{IO, Resource}
 import fs2.{Chunk, Stream}
 import java.nio.file.{Files, Path}
-import munit.CatsEffectSuite
 
 /** zfsコマンドの代わりにシェルスクリプトを実行してProcessZfsを確かめる */
-class ZfsSuite extends CatsEffectSuite:
+class ZfsSuite extends IOSpec:
   private def script(body: String): Resource[IO, Path] =
     Resource.make(IO.blocking {
       val p = Files.createTempFile("fake-zfs", ".sh")
@@ -20,26 +19,29 @@ class ZfsSuite extends CatsEffectSuite:
 
   private def recvError(body: String, force: Boolean): IO[String] =
     script(body).use { p =>
-      ProcessZfs(p.toString).recv("pool/restored", force, input).attempt.map(_.left.toOption.get.getMessage)
+      ProcessZfs(p.toString).recv("pool/restored", force, input).attempt.map(_.left.value.getMessage)
     }
 
   for (name, body) <- List("after reading the stream" -> "cat >/dev/null; exit 1", "without reading" -> "exit 1") do
     test(s"zfs recv failure shows hints ($name)") {
       recvError(body, force = false).map { msg =>
-        assert(msg.startsWith("`zfs recv pool/restored` exited with 1"), msg)
-        assert(msg.contains("hint: is the target dataset open?"), msg)
-        assert(msg.contains("hint: has the target dataset been modified since its latest snapshot?"), msg)
+        msg should startWith("`zfs recv pool/restored` exited with 1")
+        msg should include("hint: is the target dataset open?")
+        msg should include("hint: has the target dataset been modified since its latest snapshot?")
       }
     }
 
   test("with --force the modification hint is omitted") {
     recvError("cat >/dev/null; exit 1", force = true).map { msg =>
-      assert(msg.startsWith("`zfs recv -F pool/restored` exited with 1"), msg)
-      assert(msg.contains("hint: is the target dataset open?"), msg)
-      assert(!msg.contains("modified"), msg)
+      msg should startWith("`zfs recv -F pool/restored` exited with 1")
+      msg should include("hint: is the target dataset open?")
+      msg should not include "modified"
     }
   }
 
   test("successful zfs recv raises nothing") {
-    script("cat >/dev/null; exit 0").use(p => ProcessZfs(p.toString).recv("pool/restored", false, input))
+    script("cat >/dev/null; exit 0")
+      .use(p => ProcessZfs(p.toString).recv("pool/restored", false, input))
+      .attempt
+      .map(_ should === (Right(())))
   }

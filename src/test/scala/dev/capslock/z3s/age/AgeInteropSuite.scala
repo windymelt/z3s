@@ -3,7 +3,7 @@ package dev.capslock.z3s.age
 import cats.data.NonEmptyList
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
-import munit.CatsEffectSuite
+import dev.capslock.z3s.IOSpec
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
 import AgeTestSupport.*
 
 /** 公式age（AGE_BIN / AGE_KEYGEN_BIN、なければPATH上のage / age-keygen）との相互運用 */
-class AgeInteropSuite extends CatsEffectSuite:
+class AgeInteropSuite extends IOSpec:
   private def findBinary(envName: String, name: String): Option[Path] =
     sys.env
       .get(envName)
@@ -76,13 +76,13 @@ class AgeInteropSuite extends CatsEffectSuite:
         contents <- IO.blocking(Files.readString(keyFile))
         (yOut, _) <- run(kg.toString, "-y", keyFile.toString)
       yield
-        val ids = X25519Identity.parseFile(contents).fold(e => fail(e), identity)
-        assertEquals(ids.length, 1)
-        assertEquals(ids.head.recipient.encode, pub)
-        assertEquals(ids.head.recipient.encode, yOut.trim)
-        assertEquals(X25519Recipient.parse(pub).map(_.encode), Right(pub))
+        val ids = X25519Identity.parseFile(contents).value
+        ids.toList should have size 1
+        ids.head.recipient.encode should === (pub)
+        ids.head.recipient.encode should === (yOut.trim)
+        X25519Recipient.parse(pub).value.encode should === (pub)
         // 秘密鍵の再エンコードがファイルの行と一致すること
-        assert(contents.linesIterator.contains(ids.head.encode))
+        contents.linesIterator.toList should contain (ids.head.encode)
     }
   }
 
@@ -101,9 +101,9 @@ class AgeInteropSuite extends CatsEffectSuite:
             _ <- IO.blocking(Files.write(enc, cipher))
             _ <- run(age.toString, "-d", "-i", keyFile.toString, "-o", dec.toString, enc.toString)
             decrypted <- IO.blocking(Files.readAllBytes(dec))
-          yield assert(decrypted.sameElements(plain), s"size $size")
+          yield withClue(s"size $size: ")(decrypted should === (plain))
         }
-      yield ()
+      yield succeed
     }
   }
 
@@ -123,9 +123,9 @@ class AgeInteropSuite extends CatsEffectSuite:
             _ <- run(age.toString, "-r", pub, "-o", enc.toString, in.toString)
             cipher <- IO.blocking(Files.readAllBytes(enc))
             decrypted <- decryptBytes(ids, cipher)
-          yield assert(decrypted.sameElements(plain), s"size $size")
+          yield withClue(s"size $size: ")(decrypted should === (plain))
         }
-      yield ()
+      yield succeed
     }
   }
 
@@ -151,8 +151,6 @@ class AgeInteropSuite extends CatsEffectSuite:
         _ <- IO.blocking(Files.write(z3sEnc, z3sCipher))
         _ <- run(age.toString, "-d", "-i", keyFile.toString, "-o", z3sDec.toString, z3sEnc.toString)
         decrypted2 <- IO.blocking(Files.readAllBytes(z3sDec))
-      yield
-        assert(decrypted.sameElements(plain))
-        assert(decrypted2.sameElements(plain))
+      yield forAll(List(decrypted, decrypted2))(_ should === (plain))
     }
   }

@@ -3,9 +3,9 @@ package dev.capslock.z3s
 import cats.effect.IO
 import cats.syntax.all.*
 import fs2.{Chunk, Stream}
-import munit.CatsEffectSuite
+import scodec.bits.ByteVector
 
-class CompressorsSuite extends CatsEffectSuite:
+class CompressorsSuite extends IOSpec:
   val algorithms = List(
     Compression.None,
     Compression.Gzip(1),
@@ -25,25 +25,27 @@ class CompressorsSuite extends CatsEffectSuite:
 
   for alg <- algorithms do
     test(s"round trip: ${alg.label}") {
-      List(Array.emptyByteArray, Array[Byte](1), data).traverse_ { input =>
-        Stream
-          .chunk(Chunk.array(input))
-          .covary[IO]
-          .rechunkRandomly(0.001, 2.0)
-          .through(Compressors.compress(alg))
-          .rechunkRandomly(0.01, 2.0)
-          .through(Compressors.decompress(alg))
-          .compile
-          .to(Array)
-          .map(out => assert(java.util.Arrays.equals(out, input), s"${alg.label} size ${input.length}"))
-      }
+      // ByteVectorで比べると、512バイト以上のデータは失敗時に中身ではなくサイズとハッシュが表示される
+      List(Array.emptyByteArray, Array[Byte](1), data)
+        .traverse { input =>
+          Stream
+            .chunk(Chunk.array(input))
+            .covary[IO]
+            .rechunkRandomly(0.001, 2.0)
+            .through(Compressors.compress(alg))
+            .rechunkRandomly(0.01, 2.0)
+            .through(Compressors.decompress(alg))
+            .compile
+            .to(Array)
+            .map(out => (ByteVector(input), ByteVector(out)))
+        }
+        .map(results => forAll(results)((input, out) => out should === (input)))
     }
 
   test("compressed data is smaller for compressible input") {
     val input = Array.tabulate[Byte](1000000)(i => (i % 17).toByte)
-    algorithms.filter(_ != Compression.None).traverse_ { alg =>
-      Stream.chunk(Chunk.array(input)).covary[IO].through(Compressors.compress(alg)).compile.count.map { n =>
-        assert(n < input.length / 10, s"${alg.label}: $n")
-      }
-    }
+    algorithms
+      .filter(_ != Compression.None)
+      .traverse(alg => Stream.chunk(Chunk.array(input)).covary[IO].through(Compressors.compress(alg)).compile.count)
+      .map(sizes => forAll(sizes)(_ should be < (input.length / 10).toLong))
   }
