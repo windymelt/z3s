@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
 import software.amazon.awssdk.core.async.{AsyncRequestBody, AsyncResponseTransformer}
 import software.amazon.awssdk.core.checksums.{RequestChecksumCalculation, ResponseChecksumValidation}
 import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.services.s3.S3AsyncClient
+import software.amazon.awssdk.services.s3.{S3AsyncClient, S3Configuration}
 import software.amazon.awssdk.services.s3.model.*
 
 final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectStore:
@@ -160,7 +160,11 @@ final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectS
 object S3ObjectStore:
   def client(region: Option[String], endpoint: Option[URI]): Resource[IO, S3AsyncClient] =
     Resource.fromAutoCloseable(IO {
-      val b = S3AsyncClient.builder()
+      // さくらのオブジェクトストレージでは、Expect: 100-continueを付けたUploadPartが
+      // Status Code: 100で失敗し、付けない場合は成功した
+      val b = S3AsyncClient
+        .builder()
+        .serviceConfiguration(S3Configuration.builder().expectContinueEnabled(false).build())
       region.foreach(r => b.region(Region.of(r)))
       endpoint.foreach { uri =>
         // S3互換ストレージにはvirtual-hosted styleやSDK既定のチェックサムに対応しないものがある
