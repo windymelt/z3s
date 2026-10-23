@@ -140,7 +140,7 @@ class ResumeSuite extends IOSpec:
       files should === (Nil)
   }
 
-  test("state files round trip, are logged, and unreadable ones are ignored") {
+  test("state files round trip, their removal is logged, and unreadable ones are ignored") {
     for
       dir <- IO.blocking(Files.createTempDirectory("z3s-state"))
       logs <- Ref.of[IO, List[String]](Nil)
@@ -157,8 +157,7 @@ class ResumeSuite extends IOSpec:
       loaded should === (Some(state))
       other should === (None)
       broken should === (None)
-      messages should have size 3
-      messages(0) should === (s"saved resume state to ${states.path("b", "k")} (1 parts recorded)")
-      messages(1) should startWith("warning: ignoring unreadable resume state")
-      messages(2) should === (s"removed resume state ${states.path("b", "k")}")
+      messages should have size 2
+      messages(0) should startWith("warning: ignoring unreadable resume state")
+      messages(1) should === (s"removed resume state ${states.path("b", "k")}")
   }

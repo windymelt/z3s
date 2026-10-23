@@ -88,7 +88,7 @@ object UploadState:
     )
   }
 
-/** 状態をオブジェクトごとに1ファイルとして保存する。保存と削除のたびにログを出す */
+/** 状態をオブジェクトごとに1ファイルとして保存する。削除したときにログを出す */
 final class StateStore(val dir: Path, log: String => IO[Unit]):
   def path(bucket: String, key: String): Path =
     val digest = MessageDigest.getInstance("SHA-256").digest(s"$bucket\n$key".getBytes(UTF_8))
@@ -116,7 +116,7 @@ final class StateStore(val dir: Path, log: String => IO[Unit]):
       val tmp = Files.createTempFile(dir, ".tmp-", ".json")
       Files.write(tmp, Json.encode(state).toByteArray)
       Files.move(tmp, p, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-    } *> log(s"saved resume state to $p (${state.parts.size} parts recorded)")
+    }.void
 
   def delete(bucket: String, key: String): IO[Unit] =
     val p = path(bucket, key)
