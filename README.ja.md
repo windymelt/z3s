@@ -32,6 +32,7 @@ Java 24 以降では Scala ランタイムが `sun.misc.Unsafe` を使うこと�
 | `--region` | `AWS_REGION` | リージョン |
 | `--endpoint` | `Z3S_ENDPOINT` | S3 互換ストレージの endpoint。指定すると path-style でアクセスし、チェックサムの付与を必要時のみに切り替えます |
 | `--concurrency` | | S3 への並列リクエスト数。既定は 4 |
+| `--progress` | `Z3S_PROGRESS` | `auto`、`bar`、`log`、`none` のいずれか。既定は `auto` |
 | `--dry-run` | | 実行するコマンドと計画を表示し、S3 への書き込みと `zfs recv` を行いません |
 
 ```
@@ -60,6 +61,8 @@ z3s reindex --bucket my-backups --dataset tank/data
 - `--compress` の既定値は `zstd:3` です。指定できる値は `none`、`gzip[:1-9]`、`zstd[:1-19]`、`xz[:0-9]`、`bzip2[:1-9]` です。
 - incremental の親子で send mode (raw / plain) が異なる場合は中断します。圧縮方式と暗号化方式はオブジェクトごとに異なっていても構いません。
 - `restore` は、復元先にすでにある連鎖中のスナップショット (guid で判定) の次から受信します。`--force` を付けると `zfs recv -F` を使います。
+
+進捗は標準エラー出力に表示します。`backup` は、`zfs send` が出力したバイト数を `zfs send -nvP` の見積もりに対する割合で表示します。圧縮と暗号化の前のバイト数です。`restore` は、S3 からダウンロードしたバイト数をオブジェクトサイズに対する割合で表示します。`bar` は 1 行を書き換え、`log` は 10% 進むごとか 60 秒ごとに 1 行を出します。`auto` は、コンソールが端末なら `bar`、そうでなければ `log` を使います。実際のサイズが見積もりを超えた場合、割合は 99.9% で止まり、最後の行に実際のサイズを表示します。
 
 終了コードは 0 (成功)、1 (実行時エラー)、2 (引数エラー)、3 (健全性チェックによる中断) です。
 
