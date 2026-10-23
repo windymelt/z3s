@@ -16,7 +16,6 @@ jobs:
       matrix:
         java: [21, 25]
     env:
-      # 結合テストで使う外部ツールのバージョン。手元で検証したものに合わせている
       MINIO_VERSION: v0.0.0-20260212201848-7aac2a2c5b7c
       AGE_VERSION: v1.2.1
       TOOLS_DIR: /home/runner/.cache/z3s-ci-tools
@@ -34,7 +33,6 @@ jobs:
 
       - uses: sbt/setup-sbt@v1
 
-      # Docker HubにMinIOのイメージがなく、Quayからの取得も手元では拒否されたため、ソースからビルドする
       - name: Restore test tools
         id: tools
         uses: actions/cache@v4
