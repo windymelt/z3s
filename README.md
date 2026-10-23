@@ -60,7 +60,7 @@ z3s reindex --bucket my-backups --dataset tank/data
 - Without `--snapshot`, `backup` sends the latest local snapshot matching `--snapshot-prefix`. For an incremental backup, z3s walks back through local snapshots in createtxg order, picks the latest one that exists on S3 with the same guid as the base, and sends each consecutive pair from the base to the target as a separate object.
 - `--compress` defaults to `zstd:3`. Accepted values are `none`, `gzip[:1-9]`, `zstd[:1-19]`, `xz[:0-9]` and `bzip2[:1-9]`.
 - z3s refuses an incremental whose parent was sent in a different send mode (raw or plain). Compression and encryption may differ between objects.
-- `restore` starts receiving after the latest snapshot in the chain that the target already has (matched by guid). `--force` uses `zfs recv -F`.
+- `restore` starts receiving after the latest snapshot in the chain that the target already has (matched by guid). `--force` (or `-F`) uses `zfs recv -F`.
 
 Progress is printed to standard error. `backup` counts the bytes that `zfs send` has written against the estimate from `zfs send -nvP`, before compression and encryption. `restore` counts the bytes downloaded from S3 against the object size. `bar` rewrites a single line, and `log` prints one line at every 10% step or every 60 seconds. `auto` uses `bar` when the console is a terminal and `log` otherwise. If the stream grows beyond the estimate, the percentage stops at 99.9% and the final line shows the actual size.
 
