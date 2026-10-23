@@ -37,36 +37,50 @@ final class Progress(mode: ProgressMode, print: String => IO[Unit] = s => IO(Sys
   private val BarInterval = 500.millis
   private val LogInterval = 60.seconds
 
-  def track(label: String, total: Option[Long]): Pipe[IO, Byte, Byte] = in =>
-    mode match
-      case ProgressMode.None | ProgressMode.Auto => in
-      case _ =>
-        Stream.eval((Ref.of[IO, Long](0L), IO.monotonic).tupled).flatMap { (count, start) =>
-          val elapsed = IO.monotonic.map(_ - start)
-          val counted = in.chunks.evalTap(c => count.update(_ + c.size)).unchunks
-          val finish = (count.get, elapsed).flatMapN((n, t) => print(Progress.finishLine(mode, label, n, t)))
-          counted.concurrently(reporter(label, total, count, elapsed)).onFinalizeCase {
-            case ExitCase.Succeeded => finish
-            // 失敗時はバーの行を改行で閉じ、後に出るエラーメッセージと同じ行にしない
-            case _ => print("\n").whenA(mode == ProgressMode.Bar)
-          }
-        }
+  /** 進捗表示と混ざらないように1行出力する。barモードでは表示中のバーの行を消してから書く */
+  def log(message: String): IO[Unit] =
+    if mode == ProgressMode.Bar then print(s"\r\u001b[K$message\n") else print(s"$message\n")
 
-  private def reporter(label: String, total: Option[Long], count: Ref[IO, Long], elapsed: IO[FiniteDuration]) =
+  /** @param detail バイト数とは別に表示する情報(パートの数など) */
+  def track(label: String, total: Option[Long], detail: IO[Option[String]] = IO.pure(None)): Pipe[IO, Byte, Byte] =
+    in =>
+      mode match
+        case ProgressMode.None | ProgressMode.Auto => in
+        case _ =>
+          Stream.eval((Ref.of[IO, Long](0L), IO.monotonic).tupled).flatMap { (count, start) =>
+            val elapsed = IO.monotonic.map(_ - start)
+            val counted = in.chunks.evalTap(c => count.update(_ + c.size)).unchunks
+            val finish = (count.get, elapsed).flatMapN((n, t) => print(Progress.finishLine(mode, label, n, t)))
+            counted.concurrently(reporter(label, total, count, elapsed, detail)).onFinalizeCase {
+              case ExitCase.Succeeded => finish
+              // 失敗時はバーの行を改行で閉じ、後に出るエラーメッセージと同じ行にしない
+              case _ => print("\n").whenA(mode == ProgressMode.Bar)
+            }
+          }
+
+  private def reporter(
+      label: String,
+      total: Option[Long],
+      count: Ref[IO, Long],
+      elapsed: IO[FiniteDuration],
+      detail: IO[Option[String]]
+  ) =
     mode match
       case ProgressMode.Bar =>
         Stream
           .fixedRate[IO](BarInterval)
-          .evalMap(_ => (count.get, elapsed).flatMapN((n, t) => print(s"\r${Progress.line(label, n, total, t)}\u001b[K")))
+          .evalMap(_ =>
+            (count.get, elapsed, detail).flatMapN((n, t, d) => print(s"\r${Progress.line(label, n, total, t, d)}\u001b[K"))
+          )
       case _ =>
         // 前回出力した10%刻みの段階と時刻を覚え、どちらかが進んだら1行出す
         Stream
           .fixedRate[IO](1.second)
           .evalMapAccumulate((0, Duration.Zero: FiniteDuration)) { case ((step, last), _) =>
-            (count.get, elapsed).flatMapN { (n, t) =>
+            (count.get, elapsed, detail).flatMapN { (n, t, d) =>
               val now = Progress.percent(n, total).map(p => (p / 10).toInt).getOrElse(0)
               if now > step || t - last >= LogInterval then
-                print(s"${Progress.line(label, n, total, t)}\n").as(((now max step), t), ())
+                print(s"${Progress.line(label, n, total, t, d)}\n").as(((now max step), t), ())
               else IO.pure(((step, last), ()))
             }
           }
@@ -91,7 +105,13 @@ object Progress:
     val s = d.toSeconds
     f"${s / 3600}%02d:${s / 60 % 60}%02d:${s % 60}%02d"
 
-  def line(label: String, done: Long, total: Option[Long], elapsed: FiniteDuration): String =
+  def line(
+      label: String,
+      done: Long,
+      total: Option[Long],
+      elapsed: FiniteDuration,
+      detail: Option[String] = scala.None
+  ): String =
     val rate = if elapsed.toMillis > 0 then done * 1000 / elapsed.toMillis else 0L
     val parts = percent(done, total) match
       case Some(p) =>
@@ -100,7 +120,7 @@ object Progress:
         val eta = total.filter(t => done < t && rate > 0).map(t => s"ETA ${formatDuration(((t - done) / rate).seconds)}")
         List(s"[$bar]", f"$p%5.1f%%", s"${formatBytes(done)} / ~${formatBytes(total.get)}") ++ eta
       case scala.None => List(formatBytes(done))
-    ((label :: parts) :+ s"${formatBytes(rate)}/s").mkString("  ")
+    ((label :: parts) ++ detail :+ s"${formatBytes(rate)}/s").mkString("  ")
 
   def finishLine(mode: ProgressMode, label: String, done: Long, elapsed: FiniteDuration): String =
     val text = s"$label  done: ${formatBytes(done)} in ${formatDuration(elapsed)}"

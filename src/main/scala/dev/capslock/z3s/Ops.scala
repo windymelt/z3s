@@ -2,9 +2,11 @@ package dev.capslock.z3s
 
 import cats.data.NonEmptyList
 import cats.effect.{Clock, IO}
+import scala.concurrent.duration.*
 import cats.syntax.all.*
 import fs2.{Chunk, Pipe, Pull, Stream}
 import io.bullet.borer.{Json, Writer}
+import java.nio.file.Path
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.format.DateTimeFormatter
@@ -28,8 +30,16 @@ final case class BackupOptions(
     full: Boolean,
     snapshot: Option[String],
     mode: SendMode,
-    storageClass: Option[String]
-)
+    storageClass: Option[String],
+    noResume: Boolean = false,
+    /** 再開用の状態の保存先。Noneなら中断時にuploadをabortする */
+    stateDir: Option[Path] = None
+):
+  /** age暗号化はfile keyを保存しないと再開できないため、再開の対象にしない */
+  def resumable: Boolean = stateDir.isDefined && (mode match
+    case SendMode.Raw                         => true
+    case SendMode.Plain(_, Encryption.None) => true
+    case SendMode.Plain(_, Encryption.Age(_)) => false)
 
 final case class RestoreOptions(
     snapshot: String,
@@ -38,9 +48,10 @@ final case class RestoreOptions(
     identities: Option[NonEmptyList[X25519Identity]]
 )
 
-final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
+final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: FiniteDuration = 1.second):
   private val indexStore = IndexStore(store, common.indexKey)
   private val progress = Progress(ProgressMode.resolve(common.progress))
+  private val uploader = MultipartUploader(store, common.concurrency, uploadRetryBase, progress.log)
   private def out(s: String): IO[Unit] = IO.println(s)
   private def err(s: String): IO[Unit] = IO.consoleForIO.errorln(s)
   private def now: IO[Instant] = Clock[IO].realTimeInstant
@@ -90,6 +101,10 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
       plan <- Planner
         .planBackup(locals, common.snapshotPrefix, target, index, opts.full, opts.mode.kind)
         .liftTo[IO]
+      _ <- opts.stateDir match
+        case Some(dir) if opts.resumable => out(s"resume state directory: $dir")
+        case Some(_)                     => out("resume: not available for age-encrypted backups")
+        case None                        => IO.unit
       _ <- plan match
         case BackupPlan.UpToDate(s) => out(s"${s.name} is already backed up")
         case BackupPlan.Steps(steps) =>
@@ -133,20 +148,31 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
       opts: BackupOptions,
       label: String
   ): IO[Unit] =
-    val headerBytes = Cbor.encodeHeader(header)
-    val frame = Frame.encode(Frame(Frame.CurrentVersion, ByteVector(headerBytes)))
+    val states = opts.stateDir.filter(_ => opts.resumable).map(StateStore(_, progress.log))
     val metadata = Map("z3s-format" -> Frame.CurrentVersion.toString) ++ parentName.map("z3s-parent" -> _)
     val raw = opts.mode == SendMode.Raw
-    // 見積もりはzfs sendの出力サイズなので、圧縮・暗号化の前のバイト数で進捗を数える
-    val send = zfs.send(header.snapshot, parentName, raw).through(progress.track(label, Some(header.estimatedSize)))
     for
-      _ <- IO
-        .raiseError(Z3SError.Runtime(s"header is too large: ${headerBytes.length} bytes"))
-        .whenA(headerBytes.length > Frame.MaxHeaderLength)
       _ <- store.head(key).flatMap {
         case Some(_) => IO.raiseError(Z3SError.Runtime(s"object already exists: $key"))
         case None    => IO.unit
       }
+      resume <- states.flatTraverse(prepareResume(_, key, header, opts.noResume))
+      // 再開する場合は、中断前のヘッダ(createdAtを含む)とパートサイズを使って同じバイト列を作る
+      (headerBytes, effectiveHeader, effectivePartSize) <- resume match
+        case Some(r) =>
+          Cbor.decodeHeader(r.state.header.toArray).leftMap(Z3SError.Runtime(_)).liftTo[IO].map { h =>
+            (r.state.header.toArray, h, r.state.partSize)
+          }
+        case None => IO.pure((Cbor.encodeHeader(header), header, partSize.toInt))
+      _ <- IO
+        .raiseError(Z3SError.Runtime(s"header is too large: ${headerBytes.length} bytes"))
+        .whenA(headerBytes.length > Frame.MaxHeaderLength)
+      frame = Frame.encode(Frame(Frame.CurrentVersion, ByteVector(headerBytes)))
+      counters <- PartCounters.make
+      // 見積もりはzfs sendの出力サイズなので、圧縮・暗号化の前のバイト数で進捗を数える
+      send = zfs
+        .send(header.snapshot, parentName, raw)
+        .through(progress.track(label, Some(effectiveHeader.estimatedSize), counters.describe))
       payload <- opts.mode match
         case SendMode.Raw => IO.pure(send)
         case SendMode.Plain(c, e) =>
@@ -160,21 +186,60 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore):
                 .map(recipients =>
                   (Stream.chunk(Chunk.array(sha256(headerBytes))) ++ compressed).through(Age.encrypt(recipients))
                 )
-      result <- store.uploadMultipart(
+      result <- uploader.upload(
+        common.bucket,
         key,
         metadata,
         opts.storageClass,
-        partSize.toInt,
-        common.concurrency,
-        Stream.chunk(Chunk.byteVector(frame)) ++ payload
+        effectivePartSize,
+        ByteVector(headerBytes),
+        Stream.chunk(Chunk.byteVector(frame)) ++ payload,
+        states,
+        resume,
+        counters
       )
       uploadedAt <- now
       _ <- out(s"uploaded $key (${result.size} bytes)")
-      entry = IndexEntry(key, header, result.size, result.etag, uploadedAt.toString)
+      entry = IndexEntry(key, effectiveHeader, result.size, result.etag, uploadedAt.toString)
       _ <- indexStore.update(_.upsert(entry)).void.adaptError { case e =>
         Z3SError.Runtime(s"$key was uploaded, but updating the index failed (${e.getMessage}); run `z3s reindex`", e)
       }
     yield ()
+
+  /** 中断したuploadの状態があり、同じスナップショットとmodeなら再開する。そうでなければ古いuploadをabortする */
+  private def prepareResume(states: StateStore, key: String, header: Header, noResume: Boolean): IO[Option[Resume]] =
+    states.load(common.bucket, key).flatMap {
+      case None => IO.pure(None)
+      case Some(state) =>
+        val mismatch: Option[String] =
+          if noResume then Some("--no-resume was given")
+          else
+            Cbor.decodeHeader(state.header.toArray) match
+              case Left(e) => Some(e)
+              case Right(h) if h.guid != header.guid || h.parent != header.parent || h.mode != header.mode =>
+                Some("the snapshot or the mode differs")
+              case Right(_) => None
+        mismatch match
+          case Some(reason) =>
+            progress.log(s"discarding interrupted upload ${state.uploadId} of $key ($reason)") *>
+              store
+                .abortMultipartUpload(key, state.uploadId)
+                .handleErrorWith(e => progress.log(s"warning: failed to abort ${state.uploadId}: ${e.getMessage}")) *>
+              states.delete(common.bucket, key).as(None)
+          case None =>
+            store.listParts(key, state.uploadId).flatMap {
+              case None =>
+                progress.log(s"interrupted upload ${state.uploadId} of $key no longer exists; starting over") *>
+                  states.delete(common.bucket, key).as(None)
+              case Some(parts) =>
+                progress
+                  .log(
+                    s"resuming upload ${state.uploadId} of $key: " +
+                      s"${parts.size} parts on S3, ${state.parts.size} parts recorded"
+                  )
+                  .as(Some(Resume(state, parts)))
+            }
+    }
 
   // ---- restore ----
 

@@ -66,6 +66,16 @@ Progress is printed to standard error. `backup` counts the bytes that `zfs send`
 
 Exit codes: 0 (success), 1 (runtime error), 2 (usage error), 3 (aborted by a health check).
 
+## Resuming an interrupted backup
+
+Raw backups and plain backups without encryption can be resumed. If such a backup stops before it completes, for example because it was interrupted or the network failed, z3s keeps the multipart upload and its state. Running the same `backup` again resumes it. `backup` prints where the state is kept when it starts.
+
+- The state is kept in `--state-dir` (`Z3S_STATE_DIR`), which defaults to `$XDG_STATE_HOME/z3s` or `~/.local/state/z3s`. It holds the upload ID, the part size, the object header and the MD5 of each uploaded part. It contains no secrets.
+- On resume, z3s runs `zfs send` from the beginning again and skips the parts that are already on S3. It compares each regenerated part with the recorded MD5. If they differ, z3s aborts the upload and the next run starts over.
+- `--no-resume` aborts the interrupted upload and starts over. A different snapshot or mode also starts over.
+- Age-encrypted backups are not resumed, because resuming would require storing the file key. They abort the upload when they fail.
+- An upload removed by the lifecycle rule below cannot be resumed; the next run starts over.
+
 ## Cleaning up incomplete multipart uploads
 
 If the process is killed, an incomplete multipart upload remains in the bucket. Configure a lifecycle rule to remove it.

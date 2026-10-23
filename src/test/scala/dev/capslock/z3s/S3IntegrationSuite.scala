@@ -3,6 +3,8 @@ package dev.capslock.z3s
 import cats.effect.{IO, Ref, Resource}
 import fs2.{Chunk, Stream}
 import java.net.URI
+import java.nio.file.Files
+import scala.concurrent.duration.*
 import scodec.bits.ByteVector
 import scala.jdk.CollectionConverters.*
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
@@ -44,6 +46,15 @@ class S3IntegrationSuite extends IOSpec:
     IO.fromCompletableFuture(IO(c.listMultipartUploads(ListMultipartUploadsRequest.builder().bucket(bucket).build())))
       .map(_.uploads().asScala.size)
 
+  val PartSize = 5 * 1024 * 1024
+
+  /** 状態を保存しない(失敗時にabortする)アップロード */
+  def upload(store: ObjectStore, key: String, src: Stream[IO, Byte], metadata: Map[String, String] = Map.empty) =
+    PartCounters.make.flatMap { counters =>
+      MultipartUploader(store, 2, Duration.Zero, _ => IO.unit)
+        .upload("bucket", key, metadata, None, PartSize, ByteVector.empty, src, None, None, counters)
+    }
+
   val data: Array[Byte] =
     val rnd = new scala.util.Random(1)
     Array.fill(12 * 1024 * 1024 + 123)(rnd.nextInt(256).toByte)
@@ -71,12 +82,12 @@ class S3IntegrationSuite extends IOSpec:
     withStore { (c, store, bucket) =>
       val src = Stream.chunk(Chunk.array(data)).covary[IO].rechunkRandomly()
       for
-        r <- store.uploadMultipart("obj", Map("z3s-format" -> "1"), None, 5 * 1024 * 1024, 2, src)
+        r <- upload(store, "obj", src, Map("z3s-format" -> "1"))
         head <- store.head("obj")
         prefix <- store.getPrefix("obj", 100)
         whole <- store.get("obj").compile.to(Array)
         listed <- store.list("o").compile.toList
-        again <- store.uploadMultipart("obj", Map.empty, None, 5 * 1024 * 1024, 2, src).attempt
+        again <- upload(store, "obj", src).attempt
         pending <- pendingUploads(c, bucket)
       yield
         r.size should === (data.length.toLong)
@@ -93,13 +104,73 @@ class S3IntegrationSuite extends IOSpec:
     withStore { (c, store, bucket) =>
       val src = Stream.chunk(Chunk.array(data)).covary[IO] ++ Stream.raiseError[IO](new Exception("boom"))
       for
-        r <- store.uploadMultipart("obj", Map.empty, None, 5 * 1024 * 1024, 2, src).attempt
+        r <- upload(store, "obj", src).attempt
         head <- store.head("obj")
         pending <- pendingUploads(c, bucket)
       yield
         r.left.value.getMessage should === ("boom")
         head should === (None)
         pending should === (0)
+    }
+  }
+
+  test("ListParts returns uploaded parts, and None for an unknown upload") {
+    withStore { (_, store, _) =>
+      for
+        id <- store.createMultipartUpload("obj", Map.empty, None)
+        _ <- store.uploadPart("obj", id, 1, data.take(PartSize))
+        _ <- store.uploadPart("obj", id, 2, data.slice(PartSize, PartSize + 10))
+        parts <- store.listParts("obj", id)
+        _ <- store.abortMultipartUpload("obj", id)
+        gone <- store.listParts("obj", id)
+      yield
+        parts.value.map(p => (p.number, p.size)) should === (List((1, PartSize.toLong), (2, 10L)))
+        gone should === (None)
+    }
+  }
+
+  test("an interrupted upload is resumed from its state file") {
+    withStore { (_, store, bucket) =>
+      val dir = Files.createTempDirectory("z3s-state")
+      val states = StateStore(dir, _ => IO.unit)
+      val uploader = MultipartUploader(store, 2, Duration.Zero, _ => IO.unit)
+      // 1パート目が状態に記録されるのを待ってから、2パート目の途中で失敗するストリーム
+      def waitForFirstPart: IO[Unit] =
+        states.load(bucket, "obj").flatMap { s =>
+          if s.exists(_.parts.nonEmpty) then IO.unit else IO.sleep(100.millis) *> waitForFirstPart
+        }
+      val interrupted =
+        Stream.chunk(Chunk.array(data.take(PartSize + 100))).covary[IO] ++
+          Stream.exec(waitForFirstPart.timeout(30.seconds)) ++ Stream.raiseError[IO](new Exception("cut"))
+      val whole = Stream.chunk(Chunk.array(data)).covary[IO]
+      for
+        c1 <- PartCounters.make
+        first <- uploader
+          .upload(bucket, "obj", Map.empty, None, PartSize, ByteVector.empty, interrupted, Some(states), None, c1)
+          .attempt
+        saved <- states.load(bucket, "obj")
+        remote <- store.listParts("obj", saved.value.uploadId)
+        c2 <- PartCounters.make
+        result <- uploader.upload(
+          bucket,
+          "obj",
+          Map.empty,
+          None,
+          PartSize,
+          ByteVector.empty,
+          whole,
+          Some(states),
+          Some(Resume(saved.value, remote.value)),
+          c2
+        )
+        stored <- store.get("obj").compile.to(Array)
+        left <- states.load(bucket, "obj")
+      yield
+        first.left.value.getMessage should === ("cut")
+        saved.value.parts.map(_.number) should === (List(1))
+        result.size should === (data.length.toLong)
+        ByteVector(stored) should === (ByteVector(data))
+        left should === (None)
     }
   }
 
