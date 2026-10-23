@@ -28,6 +28,9 @@ class ProgressSuite extends IOSpec:
     // 見積もりを超えたらETAを出さない
     Progress.line("x", 150 * mib, Some(100 * mib), 5.seconds) should not include "ETA"
     Progress.line("x", 2048, None, 2.seconds) should === ("x  2.0 KiB  1.0 KiB/s")
+    Progress.line("x", 2048, None, 2.seconds, Some("parts 3 done, 1 uploading")) should === (
+      "x  2.0 KiB  parts 3 done, 1 uploading  1.0 KiB/s"
+    )
   }
 
   /** 10バイトずつ1.5秒おきに流し、表示された文字列と流れたデータを返す */
@@ -81,6 +84,15 @@ class ProgressSuite extends IOSpec:
       out should === (Nil)
       result.map(_.size) should === (Right(100))
     }
+  }
+
+  test("log clears the bar line before writing") {
+    for
+      printed <- Ref.of[IO, List[String]](Nil)
+      _ <- Progress(ProgressMode.Bar, s => printed.update(_ :+ s)).log("saved")
+      _ <- Progress(ProgressMode.Log, s => printed.update(_ :+ s)).log("saved")
+      out <- printed.get
+    yield out should === (List("\r\u001b[Ksaved\n", "saved\n"))
   }
 
   test("mode parsing") {

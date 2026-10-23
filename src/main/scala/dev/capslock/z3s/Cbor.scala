@@ -5,7 +5,7 @@ import io.bullet.borer.{Cbor as BorerCbor, Decoder, Encoder, Reader, Writer}
 
 /** ヘッダとインデックスのCBOR表現。mapは文字列キーとし、デコード時は未知のキーを読み飛ばす */
 object Cbor:
-  private def fail(msg: String): Nothing = throw new IllegalArgumentException(msg)
+  private[z3s] def fail(msg: String): Nothing = throw new IllegalArgumentException(msg)
 
   /** 符号なし64ビット値を`Long`のビット列のまま書く */
   private def writeU64(w: Writer, v: Long): Writer =
@@ -18,7 +18,7 @@ object Cbor:
       if v < 0 then fail(s"expected unsigned integer, got $v") else v
 
   /** mapの各要素を読み、`known`が扱わなかったキーの値を読み飛ばす */
-  private def readMap(r: Reader)(known: PartialFunction[String, Reader => Unit]): Unit =
+  private[z3s] def readMap(r: Reader)(known: PartialFunction[String, Reader => Unit]): Unit =
     def field(): Unit =
       val key = r.readString()
       known.lift(key) match
@@ -34,7 +34,7 @@ object Cbor:
       r.readMapStart()
       while !r.tryReadBreak() do field()
 
-  private def readArray[A](r: Reader)(elem: Reader => A): List[A] =
+  private[z3s] def readArray[A](r: Reader)(elem: Reader => A): List[A] =
     val b = List.newBuilder[A]
     if r.hasArrayHeader then
       val n = r.readArrayHeader()
@@ -47,7 +47,7 @@ object Cbor:
       while !r.tryReadBreak() do b += elem(r)
     b.result()
 
-  private def required[A](name: String, v: Option[A]): A = v.getOrElse(fail(s"missing key: $name"))
+  private[z3s] def required[A](name: String, v: Option[A]): A = v.getOrElse(fail(s"missing key: $name"))
 
   given Encoder[Compression] = Encoder { (w, c) =>
     val (alg, param) = c match

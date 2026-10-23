@@ -73,12 +73,25 @@ object Cli:
       Opts.option[String]("compress", "none, gzip[:1-9], zstd[:1-19], xz[:0-9] or bzip2[:1-9]. Default zstd:3.").orNone,
       Opts.option[String]("encrypt", "none or age.").orNone,
       Opts.options[String]("recipient", "age recipient (age1...). Can be repeated.").orEmpty,
-      Opts.option[String]("storage-class", "S3 storage class.").orNone
-    ).tupled.mapValidated { case (full, snapshot, raw, compress, encrypt, recipients, storageClass) =>
-      sendMode(raw, compress, encrypt, recipients).map(mode =>
-        Cmd.Backup(BackupOptions(full, snapshot, mode, storageClass))
-      )
+      Opts.option[String]("storage-class", "S3 storage class.").orNone,
+      Opts.flag("no-resume", "Discard an interrupted upload and start over.").orFalse,
+      withEnv[Path]("state-dir", "Z3S_STATE_DIR", s"Where to keep resume state (default $defaultStateDir).")
+        .withDefault(defaultStateDir)
+    ).tupled.mapValidated {
+      case (full, snapshot, raw, compress, encrypt, recipients, storageClass, noResume, stateDir) =>
+        sendMode(raw, compress, encrypt, recipients).map(mode =>
+          Cmd.Backup(BackupOptions(full, snapshot, mode, storageClass, noResume, Some(stateDir)))
+        )
     }
+
+  /** XDG Base Directory仕様の状態ディレクトリ */
+  private def defaultStateDir: Path =
+    sys.env
+      .get("XDG_STATE_HOME")
+      .filter(_.nonEmpty)
+      .map(Path.of(_))
+      .getOrElse(Path.of(sys.props("user.home"), ".local", "state"))
+      .resolve("z3s")
 
   val restore: Opts[Cmd] =
     (

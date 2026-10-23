@@ -89,25 +89,57 @@ final class InMemoryStore extends ObjectStore:
   def putIfMatch(key: String, bytes: Array[Byte], etag: String): IO[PutResult] =
     conditionalPut(key, bytes)(_.exists(_.etag == etag))
 
-  def uploadMultipart(
-      key: String,
-      metadata: Map[String, String],
-      storageClass: Option[String],
-      partSize: Int,
-      concurrency: Int,
-      data: Stream[IO, Byte]
-  ): IO[UploadResult] =
-    data.chunkN(partSize).map(_.toArray).compile.toList.flatMap { parts =>
-      partSizes.update(_ ++ parts.map(_.length)) *> nextEtag.flatMap { etag =>
-        val bytes = parts.toArray.flatten
-        objects
-          .modify { m =>
-            if m.contains(key) then (m, false)
-            else (m.updated(key, StoredObject(bytes, etag, Instant.EPOCH, metadata)), true)
-          }
-          .flatMap(ok =>
-            if ok then IO.pure(UploadResult(etag, bytes.length.toLong))
-            else IO.raiseError(Z3SError.Runtime(s"object already exists: $key"))
+  final case class PendingUpload(key: String, metadata: Map[String, String], parts: Map[Int, Array[Byte]])
+
+  val uploads: Ref[IO, Map[String, PendingUpload]] = Ref.unsafe(Map.empty)
+  val uploadPartCalls: Ref[IO, List[Int]] = Ref.unsafe(Nil)
+  val aborted: Ref[IO, List[String]] = Ref.unsafe(Nil)
+  /** この番号以降のUploadPartを失敗させる(中断の再現用) */
+  val failPartsFrom: Ref[IO, Option[Int]] = Ref.unsafe(None)
+
+  def createMultipartUpload(key: String, metadata: Map[String, String], storageClass: Option[String]): IO[String] =
+    counter.updateAndGet(_ + 1).flatMap { n =>
+      val id = s"upload-$n"
+      uploads.update(_.updated(id, PendingUpload(key, metadata, Map.empty))).as(id)
+    }
+
+  def uploadPart(key: String, uploadId: String, number: Int, bytes: Array[Byte]): IO[String] =
+    failPartsFrom.get.flatMap {
+      case Some(n) if number >= n => IO.raiseError(new java.io.IOException(s"injected failure for part $number"))
+      case _ =>
+        uploadPartCalls.update(_ :+ number) *> partSizes.update(_ :+ bytes.length) *>
+          uploads.modify { m =>
+            m.get(uploadId) match
+              case Some(u) => (m.updated(uploadId, u.copy(parts = u.parts.updated(number, bytes.clone()))), true)
+              case None    => (m, false)
+          }.flatMap(ok =>
+            if ok then IO.pure(s"\"part-$number-${bytes.length}\"")
+            else IO.raiseError(new Exception(s"no such upload: $uploadId"))
           )
+    }
+
+  def listParts(key: String, uploadId: String): IO[Option[List[UploadedPart]]] =
+    uploads.get.map(_.get(uploadId).map(_.parts.toList.sortBy(_._1).map { (n, b) =>
+      UploadedPart(n, s"\"part-$n-${b.length}\"", b.length.toLong)
+    }))
+
+  def completeMultipartUpload(key: String, uploadId: String, parts: List[UploadedPart]): IO[String] =
+    nextEtag.flatMap { etag =>
+      uploads.get.map(_.get(uploadId)).flatMap {
+        case None => IO.raiseError(new Exception(s"no such upload: $uploadId"))
+        case Some(u) =>
+          val bytes = parts.sortBy(_.number).toArray.flatMap(p => u.parts(p.number))
+          objects
+            .modify { m =>
+              if m.contains(key) then (m, false)
+              else (m.updated(key, StoredObject(bytes, etag, Instant.EPOCH, u.metadata)), true)
+            }
+            .flatMap(ok =>
+              if ok then uploads.update(_ - uploadId).as(etag)
+              else IO.raiseError(Z3SError.Unresumable(s"object already exists: $key"))
+            )
       }
     }
+
+  def abortMultipartUpload(key: String, uploadId: String): IO[Unit] =
+    aborted.update(_ :+ uploadId) *> uploads.update(_ - uploadId)

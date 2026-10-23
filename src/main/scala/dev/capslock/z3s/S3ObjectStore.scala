@@ -1,14 +1,11 @@
 package dev.capslock.z3s
 
 import cats.effect.{IO, Resource}
-import cats.effect.kernel.Resource.ExitCase
-import cats.syntax.all.*
 import fs2.{Chunk, Stream}
 import java.net.URI
 import java.nio.ByteBuffer
 import java.util.concurrent.{CompletableFuture, CompletionException}
 import org.reactivestreams.FlowAdapters
-import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 import software.amazon.awssdk.core.async.{AsyncRequestBody, AsyncResponseTransformer}
 import software.amazon.awssdk.core.checksums.{RequestChecksumCalculation, ResponseChecksumValidation}
@@ -17,8 +14,6 @@ import software.amazon.awssdk.services.s3.{S3AsyncClient, S3Configuration}
 import software.amazon.awssdk.services.s3.model.*
 
 final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectStore:
-  private val MaxParts = 10000
-  private val UploadPartRetries = 5
 
   private def call[A](f: => CompletableFuture[A]): IO[A] =
     IO.fromCompletableFuture(IO(f)).adaptError { case e: CompletionException if e.getCause != null => e.getCause }
@@ -85,77 +80,54 @@ final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectS
   def putIfMatch(key: String, bytes: Array[Byte], etag: String): IO[PutResult] =
     put(PutObjectRequest.builder().key(key).ifMatch(etag), bytes)
 
-  def uploadMultipart(
-      key: String,
-      metadata: Map[String, String],
-      storageClass: Option[String],
-      partSize: Int,
-      concurrency: Int,
-      data: Stream[IO, Byte]
-  ): IO[UploadResult] =
-    val create =
-      val b = CreateMultipartUploadRequest.builder().bucket(bucket).key(key).metadata(metadata.asJava)
-      storageClass.foreach(b.storageClass)
-      call(client.createMultipartUpload(b.build())).map(_.uploadId())
+  def createMultipartUpload(key: String, metadata: Map[String, String], storageClass: Option[String]): IO[String] =
+    val b = CreateMultipartUploadRequest.builder().bucket(bucket).key(key).metadata(metadata.asJava)
+    storageClass.foreach(b.storageClass)
+    call(client.createMultipartUpload(b.build())).map(_.uploadId())
 
-    def abort(uploadId: String): IO[Unit] =
-      call(
-        client.abortMultipartUpload(
-          AbortMultipartUploadRequest.builder().bucket(bucket).key(key).uploadId(uploadId).build()
-        )
-      ).void.handleErrorWith(e =>
-        IO.consoleForIO.errorln(s"warning: failed to abort multipart upload $uploadId for $key: ${e.getMessage}")
+  def uploadPart(key: String, uploadId: String, number: Int, bytes: Array[Byte]): IO[String] =
+    val req = UploadPartRequest.builder().bucket(bucket).key(key).uploadId(uploadId).partNumber(number).build()
+    call(client.uploadPart(req, AsyncRequestBody.fromBytesUnsafe(bytes))).map(_.eTag())
+
+  def listParts(key: String, uploadId: String): IO[Option[List[UploadedPart]]] =
+    // 1回の応答は最大1000パートなので、マーカーを進めて読む
+    def page(marker: Option[Int]): IO[ListPartsResponse] =
+      val b = ListPartsRequest.builder().bucket(bucket).key(key).uploadId(uploadId)
+      marker.foreach(m => b.partNumberMarker(m))
+      call(client.listParts(b.build()))
+
+    Stream
+      .unfoldLoopEval(Option.empty[Int])(page(_).map { r =>
+        val next = Option(r.nextPartNumberMarker()).map(_.toInt).filter(_ => r.isTruncated)
+        (r.parts().asScala.toList, next.map(Some(_)))
+      })
+      .flatMap(Stream.emits)
+      .map(p => UploadedPart(p.partNumber(), p.eTag(), p.size()))
+      .compile
+      .toList
+      .map(Option(_))
+      .recover { case e if status(e).contains(404) => None }
+
+  def completeMultipartUpload(key: String, uploadId: String, parts: List[UploadedPart]): IO[String] =
+    val completed = parts.sortBy(_.number).map(p => CompletedPart.builder().partNumber(p.number).eTag(p.etag).build())
+    val req = CompleteMultipartUploadRequest
+      .builder()
+      .bucket(bucket)
+      .key(key)
+      .uploadId(uploadId)
+      .multipartUpload(CompletedMultipartUpload.builder().parts(completed.asJava).build())
+      .ifNoneMatch("*")
+      .build()
+    call(client.completeMultipartUpload(req)).map(_.eTag()).adaptError {
+      case e if isPreconditionFailure(e) => Z3SError.Unresumable(s"object already exists: s3://$bucket/$key", e)
+    }
+
+  def abortMultipartUpload(key: String, uploadId: String): IO[Unit] =
+    call(
+      client.abortMultipartUpload(
+        AbortMultipartUploadRequest.builder().bucket(bucket).key(key).uploadId(uploadId).build()
       )
-
-    def uploadPart(uploadId: String, number: Int, bytes: Array[Byte]): IO[CompletedPart] =
-      val req = UploadPartRequest.builder().bucket(bucket).key(key).uploadId(uploadId).partNumber(number).build()
-      val once = call(client.uploadPart(req, AsyncRequestBody.fromBytesUnsafe(bytes)))
-        .map(r => CompletedPart.builder().partNumber(number).eTag(r.eTag()).build())
-      def attempt(n: Int): IO[CompletedPart] =
-        once.handleErrorWith { e =>
-          if n >= UploadPartRetries then IO.raiseError(e)
-          else
-            val delay = (1L << n).seconds
-            IO.consoleForIO.errorln(s"warning: UploadPart $number failed (${e.getMessage}); retrying in $delay") *>
-              IO.sleep(delay) *> attempt(n + 1)
-        }
-      attempt(0)
-
-    def complete(uploadId: String, parts: List[CompletedPart]): IO[String] =
-      val req = CompleteMultipartUploadRequest
-        .builder()
-        .bucket(bucket)
-        .key(key)
-        .uploadId(uploadId)
-        .multipartUpload(CompletedMultipartUpload.builder().parts(parts.asJava).build())
-        .ifNoneMatch("*")
-        .build()
-      call(client.completeMultipartUpload(req)).map(_.eTag()).adaptError {
-        case e if isPreconditionFailure(e) => Z3SError.Runtime(s"object already exists: s3://$bucket/$key", e)
-      }
-
-    Resource
-      .makeCase(create) {
-        case (_, ExitCase.Succeeded) => IO.unit
-        case (uploadId, _)           => abort(uploadId)
-      }
-      .use { uploadId =>
-        data
-          .chunkN(partSize, allowFewer = true)
-          .zipWithIndex
-          .evalTap { case (_, i) =>
-            IO.raiseError(Z3SError.Runtime(s"part count exceeds $MaxParts; the size estimate was too small"))
-              .whenA(i >= MaxParts)
-          }
-          .parEvalMap(concurrency) { case (chunk, i) =>
-            uploadPart(uploadId, i.toInt + 1, chunk.toArray).map(p => (p, chunk.size.toLong))
-          }
-          .compile
-          .toList
-          .flatMap { parts =>
-            complete(uploadId, parts.map(_._1)).map(etag => UploadResult(etag, parts.map(_._2).sum))
-          }
-      }
+    ).void
 
 object S3ObjectStore:
   def client(region: Option[String], endpoint: Option[URI]): Resource[IO, S3AsyncClient] =
