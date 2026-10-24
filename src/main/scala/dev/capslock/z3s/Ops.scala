@@ -13,6 +13,8 @@ import java.time.format.DateTimeFormatter
 import scodec.bits.ByteVector
 import dev.capslock.z3s.age.{Age, X25519Identity, X25519Recipient}
 
+val IndexFileName = ".z3s-index.cbor"
+
 final case class Common(
     bucket: String,
     prefix: String,
@@ -24,7 +26,7 @@ final case class Common(
 ):
   def objectKey(snapshotName: String): String = s"$prefix$snapshotName"
   def objectPrefix: String = s"$prefix$dataset@"
-  def indexKey: String = s"$prefix$dataset/.z3s-index.cbor"
+  def indexKey: String = s"$prefix$dataset/$IndexFileName"
 
 final case class BackupOptions(
     full: Boolean,
@@ -33,7 +35,9 @@ final case class BackupOptions(
     storageClass: Option[String],
     noResume: Boolean = false,
     /** 再開用の状態の保存先。Noneなら中断時にuploadをabortする */
-    stateDir: Option[Path] = None
+    stateDir: Option[Path] = None,
+    /** 子孫のdatasetもそれぞれバックアップする */
+    recursive: Boolean = false
 ):
   /** age暗号化はfile keyを保存しないと再開できないため、再開の対象にしない */
   def resumable: Boolean = stateDir.isDefined && (mode match
@@ -94,17 +98,68 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
   // ---- backup ----
 
   def backup(opts: BackupOptions): IO[Unit] =
+    val resumeNotice = opts.stateDir match
+      case Some(dir) if opts.resumable => out(s"resume state directory: $dir")
+      case Some(dir) if opts.recursive =>
+        out(s"resume state directory: $dir (not used for age-encrypted backups)")
+      case Some(_) => out("resume: not available for age-encrypted backups")
+      case None    => IO.unit
+
+    resumeNotice *> (if opts.recursive then backupTree(opts) else backupDataset(opts, autoFull = false))
+
+  /** 子孫のdatasetを親から順にバックアップする。失敗したdatasetがあっても残りを続け、最後にまとめて報告する */
+  private def backupTree(opts: BackupOptions): IO[Unit] =
+    for
+      datasets <- zfs.listDatasets(common.dataset)
+      rootLocals <- zfs.listSnapshots(common.dataset)
+      // zfs snapshot -rで作った同じ時点のスナップショットを揃えるため、送る名前はrootで決める
+      target <- Planner.selectTarget(rootLocals, common.snapshotPrefix, opts.snapshot).liftTo[IO]
+      _ <- out(s"recursive backup of ${datasets.size} dataset(s) at @${target.shortName}")
+      results <- datasets.zipWithIndex.traverse { (ds, i) =>
+        backupTreeMember(ds, s"[${i + 1}/${datasets.size}]", target.shortName, opts)
+      }
+      failed = results.flatten
+      _ <- IO.raiseError(Z3SError.fromExitCode(
+        failed.map(_._2).map { case z: Z3SError => z.exitCode; case _ => 1 }.distinct match
+          case List(code) => code
+          case _          => 1,
+        s"${failed.size} of ${datasets.size} dataset(s) failed: ${failed.map(_._1).mkString(", ")}"
+      )).whenA(failed.nonEmpty)
+    yield ()
+
+  /** 木の中の1つのdatasetをバックアップする。失敗した場合はdataset名とエラーを返す */
+  private def backupTreeMember(
+      ds: DatasetInfo,
+      position: String,
+      snapshot: String,
+      opts: BackupOptions
+  ): IO[Option[(String, Throwable)]] =
+    // ZFSネイティブ暗号化されたdatasetは、平文で送らないようにrawにする
+    val mode = if ds.nativeEncrypted then SendMode.Raw else opts.mode
+    val note = if ds.nativeEncrypted && opts.mode != SendMode.Raw then " (encrypted; sending raw)" else ""
+    val child = Ops(common.copy(dataset = ds.name), zfs, store, uploadRetryBase)
+    val childOpts = opts.copy(snapshot = Some(snapshot), mode = mode, recursive = false)
+    val run = zfs.listSnapshots(ds.name).flatMap { locals =>
+      if !locals.exists(_.shortName == snapshot) then err(s"warning: ${ds.name} has no snapshot @$snapshot; skipping")
+      else child.backupDataset(childOpts, autoFull = true)
+    }
+
+    out(s"== $position ${ds.name}$note") *> run.attempt.flatMap {
+      case Right(()) => IO.pure(None)
+      case Left(e)   => err(s"error: ${ds.name}: ${e.getMessage}").as(Some((ds.name, e)))
+    }
+
+  /** @param autoFull trueなら、S3にバックアップが1つもないdatasetをfullで送る */
+  private def backupDataset(opts: BackupOptions, autoFull: Boolean): IO[Unit] =
     for
       locals <- zfs.listSnapshots(common.dataset)
       target <- Planner.selectTarget(locals, common.snapshotPrefix, opts.snapshot).liftTo[IO]
       index <- loadIndex
+      full = opts.full || (autoFull && index.entries.isEmpty)
+      _ <- out(s"no backups of ${common.dataset} on S3; sending a full stream").whenA(full && !opts.full)
       plan <- Planner
-        .planBackup(locals, common.snapshotPrefix, target, index, opts.full, opts.mode.kind)
+        .planBackup(locals, common.snapshotPrefix, target, index, full, opts.mode.kind)
         .liftTo[IO]
-      _ <- opts.stateDir match
-        case Some(dir) if opts.resumable => out(s"resume state directory: $dir")
-        case Some(_)                     => out("resume: not available for age-encrypted backups")
-        case None                        => IO.unit
       _ <- plan match
         case BackupPlan.UpToDate(s) => out(s"${s.name} is already backed up")
         case BackupPlan.Steps(steps) =>
@@ -314,18 +369,48 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
 
   // ---- status ----
 
-  def status(refresh: Boolean, json: Boolean): IO[Unit] =
+  def status(refresh: Boolean, json: Boolean, recursive: Boolean = false): IO[Unit] =
+    statusText(refresh, json, recursive).flatMap(out)
+
+  def statusText(refresh: Boolean, json: Boolean, recursive: Boolean): IO[String] =
+    if !recursive then statusRows(refresh).map(rows => if json then StatusRow.json(rows) else StatusRow.table(rows))
+    else
+      for
+        datasets <- treeDatasets
+        sections <- datasets.traverse(ds => Ops(common.copy(dataset = ds), zfs, store).statusRows(refresh).map(ds -> _))
+      yield if json then StatusRow.jsonTree(sections) else StatusRow.tableTree(sections)
+
+  private def statusRows(refresh: Boolean): IO[List[StatusRow]] =
     for
       index <- if refresh then reindex else loadIndex
       exists <- zfs.datasetExists(common.dataset)
       locals <- if exists then zfs.listSnapshots(common.dataset) else IO.pure(Nil)
       health = Planner.health(index)
       localGuids = locals.map(_.guid).toSet
-      rows = index.entries.sortBy(_.header.createtxg).map { e =>
-        StatusRow(e, health(e.key), localGuids.contains(e.header.guid))
-      }
-      _ <- if json then out(StatusRow.json(rows)) else out(StatusRow.table(rows))
-    yield ()
+    yield index.entries.sortBy(_.header.createtxg).map { e =>
+      StatusRow(e, health(e.key), localGuids.contains(e.header.guid))
+    }
+
+  /** ローカルの子孫と、S3にバックアップかインデックスがあるdatasetを合わせて、名前の順に返す */
+  private def treeDatasets: IO[List[String]] =
+    val root = common.dataset
+    def isInTree(name: String) = name == root || name.startsWith(s"$root/")
+    for
+      exists <- zfs.datasetExists(root)
+      local <- if exists then zfs.listDatasets(root).map(_.map(_.name)) else IO.pure(Nil)
+      // prefixの一覧には兄弟のdataset(pool/foobarなど)も含まれるため、isInTreeで絞る
+      remote <- store
+        .list(s"${common.prefix}$root")
+        .map(_.key.stripPrefix(common.prefix))
+        // インデックスのキー(<dataset>/.z3s-index.cbor)とバックアップのキー(<dataset>@<snapshot>)から、datasetの名前を取り出す
+        .collect {
+          case k if k.endsWith(s"/$IndexFileName") => k.stripSuffix(s"/$IndexFileName")
+          case k if k.contains('@')                => k.takeWhile(_ != '@')
+        }
+        .filter(isInTree)
+        .compile
+        .toList
+    yield (local ++ remote).distinct.sorted
 
 final case class StatusRow(entry: IndexEntry, health: Health, local: Boolean):
   def h: Header = entry.header
@@ -352,6 +437,16 @@ object StatusRow:
     val all = header :: body
     val widths = header.indices.map(i => all.map(_(i).length).max)
     all.map(_.zip(widths).map((s, w) => s.padTo(w, ' ')).mkString("  ").stripTrailing).mkString("\n")
+
+  def tableTree(sections: List[(String, List[StatusRow])]): String =
+    sections
+      .map((dataset, rows) => s"== $dataset\n" + (if rows.isEmpty then "(no backups)" else table(rows)))
+      .mkString("\n\n")
+
+  def jsonTree(sections: List[(String, List[StatusRow])]): String =
+    sections
+      .map((dataset, rows) => s"""{"dataset":${Json.encode(dataset).toUtf8String},"snapshots":${json(rows)}}""")
+      .mkString("[", ",", "]")
 
   def json(rows: List[StatusRow]): String =
     def row(w: Writer, r: StatusRow): Writer =

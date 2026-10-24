@@ -5,7 +5,11 @@ import cats.syntax.all.*
 import fs2.Stream
 import fs2.io.process.{ProcessBuilder, Redirect}
 
+final case class DatasetInfo(name: String, nativeEncrypted: Boolean)
+
 trait Zfs:
+  /** rootとその子孫のfilesystemとvolumeを、名前の順(親が子より先)で返す */
+  def listDatasets(root: String): IO[List[DatasetInfo]]
   /** createtxgの昇順で返す */
   def listSnapshots(dataset: String): IO[List[Snapshot]]
   def datasetExists(dataset: String): IO[Boolean]
@@ -31,6 +35,17 @@ object ZfsCommands:
     ("recv" :: (if force then List("-F") else Nil)) :+ target
 
   def show(args: List[String]): String = ("zfs" :: args).mkString(" ")
+
+  def listDatasets(root: String): List[String] =
+    List("list", "-H", "-o", "name,encryption", "-t", "filesystem,volume", "-r", root)
+
+  /** encryptionは暗号化していなければ"off"になる。値のない"-"も暗号化なしとして扱う */
+  def parseDatasets(out: String): Either[String, List[DatasetInfo]] =
+    out.linesIterator.filter(_.nonEmpty).toList.traverse { line =>
+      line.split("\t") match
+        case Array(name, encryption) => Right(DatasetInfo(name, nativeEncrypted = encryption != "off" && encryption != "-"))
+        case _                       => Left(s"cannot parse zfs list output: $line")
+    }.map(_.sortBy(_.name))
 
   /** zfs recvが失敗したときに考えられる原因 */
   def recvHints(force: Boolean): List[String] =
@@ -85,6 +100,13 @@ final class ProcessZfs(command: String = "zfs") extends Zfs:
 
   def datasetExists(dataset: String): IO[Boolean] =
     run(List("list", "-H", "-o", "name", dataset)).map(_._1 == 0)
+
+  def listDatasets(root: String): IO[List[DatasetInfo]] =
+    val args = ZfsCommands.listDatasets(root)
+    run(args).flatMap {
+      case (0, out, _)    => ZfsCommands.parseDatasets(out).leftMap(Z3SError.Runtime(_)).liftTo[IO]
+      case (code, _, err) => IO.raiseError(failed(args, code, err))
+    }
 
   def estimateSize(snapshot: String, parent: Option[String], raw: Boolean): IO[Long] =
     // 出力先がstdoutとstderrのどちらになるかはOpenZFSのバージョンで異なるため、両方を読む
