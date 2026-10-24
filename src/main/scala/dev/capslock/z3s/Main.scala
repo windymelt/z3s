@@ -13,7 +13,7 @@ final case class Connection(region: Option[String], endpoint: Option[URI])
 enum Cmd:
   case Backup(opts: BackupOptions)
   case Restore(snapshot: String, target: Option[String], force: Boolean, identity: Option[Path])
-  case Status(refresh: Boolean, json: Boolean)
+  case Status(refresh: Boolean, json: Boolean, recursive: Boolean)
   case Reindex
 
 object Cli:
@@ -76,13 +76,17 @@ object Cli:
       Opts.option[String]("storage-class", "S3 storage class.").orNone,
       Opts.flag("no-resume", "Discard an interrupted upload and start over.").orFalse,
       withEnv[Path]("state-dir", "Z3S_STATE_DIR", s"Where to keep resume state (default $defaultStateDir).")
-        .withDefault(defaultStateDir)
+        .withDefault(defaultStateDir),
+      recursiveFlag
     ).tupled.mapValidated {
-      case (full, snapshot, raw, compress, encrypt, recipients, storageClass, noResume, stateDir) =>
+      case (full, snapshot, raw, compress, encrypt, recipients, storageClass, noResume, stateDir, recursive) =>
         sendMode(raw, compress, encrypt, recipients).map(mode =>
-          Cmd.Backup(BackupOptions(full, snapshot, mode, storageClass, noResume, Some(stateDir)))
+          Cmd.Backup(BackupOptions(full, snapshot, mode, storageClass, noResume, Some(stateDir), recursive))
         )
     }
+
+  private def recursiveFlag: Opts[Boolean] =
+    Opts.flag("recursive", "Also process the descendant datasets.", short = "r").orFalse
 
   /** XDG Base Directory仕様の状態ディレクトリ */
   private def defaultStateDir: Path =
@@ -104,7 +108,8 @@ object Cli:
   val status: Opts[Cmd] =
     (
       Opts.flag("refresh", "Run reindex first.").orFalse,
-      Opts.flag("json", "Print JSON.").orFalse
+      Opts.flag("json", "Print JSON.").orFalse,
+      recursiveFlag
     ).mapN(Cmd.Status.apply)
 
   private def sub(name: String, help: String, opts: Opts[Cmd]): Opts[(Common, Connection, Cmd)] =
@@ -135,7 +140,7 @@ object Main extends IOApp:
           case Cmd.Backup(opts) => ops.backup(opts)
           case Cmd.Restore(snapshot, target, force, _) =>
             ops.restore(RestoreOptions(snapshot, target, force, ids))
-          case Cmd.Status(refresh, json) => ops.status(refresh, json)
+          case Cmd.Status(refresh, json, recursive) => ops.status(refresh, json, recursive)
           case Cmd.Reindex => ops.reindex.flatMap(i => IO.println(s"indexed ${i.entries.size} object(s)"))
       }
     }

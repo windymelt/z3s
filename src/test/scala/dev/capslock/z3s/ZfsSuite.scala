@@ -45,3 +45,15 @@ class ZfsSuite extends IOSpec:
       .attempt
       .map(_ should === (Right(())))
   }
+
+  test("zfs list output of datasets is parsed with their encryption") {
+    ZfsCommands.parseDatasets("pool/foo/bar\taes-256-gcm\npool/foo\toff\npool/legacy\t-\n") should === (
+      Right(
+        List(
+          DatasetInfo("pool/foo", encrypted = false),
+          DatasetInfo("pool/foo/bar", encrypted = true),
+          DatasetInfo("pool/legacy", encrypted = false)
+        )
+      )
+    )
+  }

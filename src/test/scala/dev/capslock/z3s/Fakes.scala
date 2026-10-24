@@ -12,6 +12,17 @@ final class FakeZfs(
     payloadSize: Int
 ) extends Zfs:
   val received: Ref[IO, List[(String, Array[Byte])]] = Ref.unsafe(Nil)
+  /** ZFSネイティブ暗号化されたdataset */
+  val encrypted: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
+  /** zfs sendを失敗させるdataset */
+  val failingSends: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
+  /** zfs sendを呼んだ(スナップショット, raw)の組 */
+  val sends: Ref[IO, List[(String, Boolean)]] = Ref.unsafe(Nil)
+
+  def listDatasets(root: String): IO[List[DatasetInfo]] =
+    (datasets.get, encrypted.get).mapN { (m, enc) =>
+      m.keys.toList.filter(n => n == root || n.startsWith(s"$root/")).sorted.map(n => DatasetInfo(n, enc.contains(n)))
+    }
 
   def streamFor(snapshot: Snapshot, parent: Option[String], raw: Boolean): Array[Byte] =
     val head = s"SNAP ${snapshot.shortName} ${snapshot.guid} ${snapshot.createtxg} ${parent.getOrElse("-")} $raw\n"
@@ -30,7 +41,10 @@ final class FakeZfs(
     find(snapshot).map(s => streamFor(s, parent, raw).length.toLong)
 
   def send(snapshot: String, parent: Option[String], raw: Boolean): Stream[IO, Byte] =
-    Stream.eval(find(snapshot)).flatMap(s => Stream.chunk(Chunk.array(streamFor(s, parent, raw))).rechunkRandomly())
+    Stream.eval(sends.update(_ :+ (snapshot -> raw)) *> find(snapshot) <* failingSends.get.flatMap { failing =>
+      val dataset = snapshot.takeWhile(_ != '@')
+      IO.raiseError(new Exception(s"injected send failure for $dataset")).whenA(failing.contains(dataset))
+    }).flatMap(s => Stream.chunk(Chunk.array(streamFor(s, parent, raw))).rechunkRandomly())
 
   def recv(target: String, force: Boolean, input: Stream[IO, Byte]): IO[Unit] =
     input.compile.to(Array).flatMap { bytes =>
