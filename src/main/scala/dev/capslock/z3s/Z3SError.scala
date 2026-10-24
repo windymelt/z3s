@@ -15,7 +15,7 @@ object Z3SError:
   final class Health(message: String) extends Z3SError(message, 3)
 
   /** 終了コードに対応する種類のエラーを作る */
-  def withExitCode(code: Int, message: String): Z3SError = code match
+  def fromExitCode(code: Int, message: String): Z3SError = code match
     case 2 => Usage(message)
     case 3 => Health(message)
     case _ => Runtime(message)

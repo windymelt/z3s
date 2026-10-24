@@ -5,7 +5,6 @@ import cats.syntax.all.*
 import fs2.Stream
 import fs2.io.process.{ProcessBuilder, Redirect}
 
-/** nativeEncryptedはZFSネイティブ暗号化が有効か */
 final case class DatasetInfo(name: String, nativeEncrypted: Boolean)
 
 trait Zfs:

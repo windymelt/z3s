@@ -47,7 +47,12 @@ class ZfsSuite extends IOSpec:
   }
 
   test("zfs list output of datasets is parsed with their encryption") {
-    ZfsCommands.parseDatasets("pool/foo/bar\taes-256-gcm\npool/foo\toff\npool/legacy\t-\n") should === (
+    val output =
+      s"""pool/foo/bar\taes-256-gcm
+         |pool/foo\toff
+         |pool/legacy\t-
+         |""".stripMargin
+    ZfsCommands.parseDatasets(output) should === (
       Right(
         List(
           DatasetInfo("pool/foo", nativeEncrypted = false),

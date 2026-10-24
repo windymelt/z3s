@@ -119,7 +119,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
         backupTreeMember(ds, s"[${i + 1}/${datasets.size}]", target.shortName, opts)
       }
       failed = results.flatten
-      _ <- IO.raiseError(Z3SError.withExitCode(
+      _ <- IO.raiseError(Z3SError.fromExitCode(
         failed.map(_._2).map { case z: Z3SError => z.exitCode; case _ => 1 }.distinct match
           case List(code) => code
           case _          => 1,
@@ -395,19 +395,20 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
   /** ローカルの子孫と、S3にバックアップかインデックスがあるdatasetを合わせて、名前の順に返す */
   private def treeDatasets: IO[List[String]] =
     val root = common.dataset
-    def inTree(name: String) = name == root || name.startsWith(s"$root/")
+    def isInTree(name: String) = name == root || name.startsWith(s"$root/")
     for
       exists <- zfs.datasetExists(root)
       local <- if exists then zfs.listDatasets(root).map(_.map(_.name)) else IO.pure(Nil)
-      // prefixの一覧には兄弟のdataset(pool/foobarなど)も含まれるため、inTreeで絞る
+      // prefixの一覧には兄弟のdataset(pool/foobarなど)も含まれるため、isInTreeで絞る
       remote <- store
         .list(s"${common.prefix}$root")
         .map(_.key.stripPrefix(common.prefix))
+        // インデックスのキー(<dataset>/.z3s-index.cbor)とバックアップのキー(<dataset>@<snapshot>)から、datasetの名前を取り出す
         .collect {
           case k if k.endsWith(s"/$IndexFileName") => k.stripSuffix(s"/$IndexFileName")
           case k if k.contains('@')                => k.takeWhile(_ != '@')
         }
-        .filter(inTree)
+        .filter(isInTree)
         .compile
         .toList
     yield (local ++ remote).distinct.sorted
