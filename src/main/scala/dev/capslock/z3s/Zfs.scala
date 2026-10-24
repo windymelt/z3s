@@ -5,8 +5,8 @@ import cats.syntax.all.*
 import fs2.Stream
 import fs2.io.process.{ProcessBuilder, Redirect}
 
-/** encryptedはZFSネイティブ暗号化が有効か */
-final case class DatasetInfo(name: String, encrypted: Boolean)
+/** nativeEncryptedはZFSネイティブ暗号化が有効か */
+final case class DatasetInfo(name: String, nativeEncrypted: Boolean)
 
 trait Zfs:
   /** rootとその子孫のfilesystemとvolumeを、名前の順(親が子より先)で返す */
@@ -44,7 +44,7 @@ object ZfsCommands:
   def parseDatasets(out: String): Either[String, List[DatasetInfo]] =
     out.linesIterator.filter(_.nonEmpty).toList.traverse { line =>
       line.split("\t") match
-        case Array(name, encryption) => Right(DatasetInfo(name, encryption != "off" && encryption != "-"))
+        case Array(name, encryption) => Right(DatasetInfo(name, nativeEncrypted = encryption != "off" && encryption != "-"))
         case _                       => Left(s"cannot parse zfs list output: $line")
     }.map(_.sortBy(_.name))
 

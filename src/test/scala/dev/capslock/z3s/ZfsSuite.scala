@@ -50,9 +50,9 @@ class ZfsSuite extends IOSpec:
     ZfsCommands.parseDatasets("pool/foo/bar\taes-256-gcm\npool/foo\toff\npool/legacy\t-\n") should === (
       Right(
         List(
-          DatasetInfo("pool/foo", encrypted = false),
-          DatasetInfo("pool/foo/bar", encrypted = true),
-          DatasetInfo("pool/legacy", encrypted = false)
+          DatasetInfo("pool/foo", nativeEncrypted = false),
+          DatasetInfo("pool/foo/bar", nativeEncrypted = true),
+          DatasetInfo("pool/legacy", nativeEncrypted = false)
         )
       )
     )

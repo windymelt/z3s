@@ -23,7 +23,7 @@ class RecursiveSuite extends IOSpec:
       val zfs = FakeZfs(ds, 1000)
       val store = InMemoryStore()
       val common = Common("bucket", "backups/", "pool/foo", None, dryRun = false, concurrency = 2)
-      zfs.encrypted.set(Set("pool/foo/bar")).as(Env(zfs, store, Ops(common, zfs, store)))
+      zfs.nativeEncrypted.set(Set("pool/foo/bar")).as(Env(zfs, store, Ops(common, zfs, store)))
     }
 
   def backup(e: Env, mode: SendMode = zstd, full: Boolean = false, snapshot: Option[String] = None) =

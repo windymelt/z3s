@@ -13,14 +13,14 @@ final class FakeZfs(
 ) extends Zfs:
   val received: Ref[IO, List[(String, Array[Byte])]] = Ref.unsafe(Nil)
   /** ZFSネイティブ暗号化されたdataset */
-  val encrypted: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
+  val nativeEncrypted: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
   /** zfs sendを失敗させるdataset */
   val failingSends: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
   /** zfs sendを呼んだ(スナップショット, raw)の組 */
   val sends: Ref[IO, List[(String, Boolean)]] = Ref.unsafe(Nil)
 
   def listDatasets(root: String): IO[List[DatasetInfo]] =
-    (datasets.get, encrypted.get).mapN { (m, enc) =>
+    (datasets.get, nativeEncrypted.get).mapN { (m, enc) =>
       m.keys.toList.filter(n => n == root || n.startsWith(s"$root/")).sorted.map(n => DatasetInfo(n, enc.contains(n)))
     }
 

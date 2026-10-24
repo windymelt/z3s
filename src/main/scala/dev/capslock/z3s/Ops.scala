@@ -104,6 +104,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
         out(s"resume state directory: $dir (not used for age-encrypted backups)")
       case Some(_) => out("resume: not available for age-encrypted backups")
       case None    => IO.unit
+
     resumeNotice *> (if opts.recursive then backupTree(opts) else backupDataset(opts, autoFull = false))
 
   /** 子孫のdatasetを親から順にバックアップする。失敗したdatasetがあっても残りを続け、最後にまとめて報告する */
@@ -115,23 +116,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
       target <- Planner.selectTarget(rootLocals, common.snapshotPrefix, opts.snapshot).liftTo[IO]
       _ <- out(s"recursive backup of ${datasets.size} dataset(s) at @${target.shortName}")
       results <- datasets.zipWithIndex.traverse { (ds, i) =>
-        // ZFSネイティブ暗号化されたdatasetは、平文で送らないようにrawにする
-        val mode = if ds.encrypted then SendMode.Raw else opts.mode
-        val note = if ds.encrypted && opts.mode != SendMode.Raw then " (encrypted; sending raw)" else ""
-        val child = Ops(common.copy(dataset = ds.name), zfs, store, uploadRetryBase)
-        out(s"== [${i + 1}/${datasets.size}] ${ds.name}$note") *>
-          zfs.listSnapshots(ds.name).flatMap { locals =>
-            if !locals.exists(_.shortName == target.shortName) then
-              err(s"warning: ${ds.name} has no snapshot @${target.shortName}; skipping").as(None)
-            else
-              child
-                .backupDataset(opts.copy(snapshot = Some(target.shortName), mode = mode, recursive = false), autoFull = true)
-                .attempt
-                .flatMap {
-                  case Right(()) => IO.pure(None)
-                  case Left(e)   => err(s"error: ${ds.name}: ${e.getMessage}").as(Some((ds.name, e)))
-                }
-          }
+        backupTreeMember(ds, s"[${i + 1}/${datasets.size}]", target.shortName, opts)
       }
       failed = results.flatten
       _ <- IO.raiseError(Z3SError.withExitCode(
@@ -141,6 +126,29 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
         s"${failed.size} of ${datasets.size} dataset(s) failed: ${failed.map(_._1).mkString(", ")}"
       )).whenA(failed.nonEmpty)
     yield ()
+
+  /** 木の中の1つのdatasetをバックアップする。失敗した場合はdataset名とエラーを返す */
+  private def backupTreeMember(
+      ds: DatasetInfo,
+      position: String,
+      snapshot: String,
+      opts: BackupOptions
+  ): IO[Option[(String, Throwable)]] =
+    // ZFSネイティブ暗号化されたdatasetは、平文で送らないようにrawにする
+    val mode = if ds.nativeEncrypted then SendMode.Raw else opts.mode
+    val note = if ds.nativeEncrypted && opts.mode != SendMode.Raw then " (encrypted; sending raw)" else ""
+    val child = Ops(common.copy(dataset = ds.name), zfs, store, uploadRetryBase)
+    val childOpts = opts.copy(snapshot = Some(snapshot), mode = mode, recursive = false)
+    out(s"== $position ${ds.name}$note") *>
+      zfs.listSnapshots(ds.name).flatMap { locals =>
+        if !locals.exists(_.shortName == snapshot) then
+          err(s"warning: ${ds.name} has no snapshot @$snapshot; skipping").as(None)
+        else
+          child.backupDataset(childOpts, autoFull = true).attempt.flatMap {
+            case Right(()) => IO.pure(None)
+            case Left(e)   => err(s"error: ${ds.name}: ${e.getMessage}").as(Some((ds.name, e)))
+          }
+      }
 
   /** @param autoFull trueなら、S3にバックアップが1つもないdatasetをfullで送る */
   private def backupDataset(opts: BackupOptions, autoFull: Boolean): IO[Unit] =
