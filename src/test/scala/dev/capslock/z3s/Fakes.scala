@@ -18,6 +18,8 @@ final class FakeZfs(
   val failingSends: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
   /** スナップショットの一覧を失敗させるdataset */
   val failingListSnapshots: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
+  /** zfs recvを失敗させる受信先 */
+  val failingRecvs: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
   /** zfs sendを呼んだ(スナップショット, raw)の組 */
   val sends: Ref[IO, List[(String, Boolean)]] = Ref.unsafe(Nil)
 
@@ -51,7 +53,9 @@ final class FakeZfs(
     }).flatMap(s => Stream.chunk(Chunk.array(streamFor(s, parent, raw))).rechunkRandomly())
 
   def recv(target: String, force: Boolean, input: Stream[IO, Byte]): IO[Unit] =
-    input.compile.to(Array).flatMap { bytes =>
+    failingRecvs.get.flatMap { failing =>
+      IO.raiseError(new Exception(s"injected recv failure for $target")).whenA(failing.contains(target))
+    } *> input.compile.to(Array).flatMap { bytes =>
       val line = new String(bytes.takeWhile(_ != '\n'.toByte), UTF_8)
       line.split(" ") match
         case Array("SNAP", short, guid, txg, _, _) =>

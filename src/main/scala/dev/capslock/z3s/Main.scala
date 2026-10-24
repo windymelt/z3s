@@ -12,7 +12,7 @@ final case class Connection(region: Option[String], endpoint: Option[URI])
 
 enum Cmd:
   case Backup(opts: BackupOptions)
-  case Restore(snapshot: String, target: Option[String], force: Boolean, identity: Option[Path])
+  case Restore(snapshot: String, target: Option[String], force: Boolean, identity: Option[Path], recursive: Boolean)
   case Status(refresh: Boolean, json: Boolean, recursive: Boolean)
   case Reindex
 
@@ -102,7 +102,8 @@ object Cli:
       Opts.argument[String]("SNAPSHOT"),
       Opts.option[String]("target", "Dataset to receive into. Defaults to --dataset.").orNone,
       Opts.flag("force", "Use zfs recv -F.", short = "F").orFalse,
-      Opts.option[Path]("identity", "age identity file (AGE-SECRET-KEY-1...).").orNone
+      Opts.option[Path]("identity", "age identity file (AGE-SECRET-KEY-1...).").orNone,
+      recursiveFlag
     ).mapN(Cmd.Restore.apply)
 
   val status: Opts[Cmd] =
@@ -131,15 +132,15 @@ object Main extends IOApp:
 
   def execute(common: Common, connection: Connection, cmd: Cmd): IO[Unit] =
     val identities = cmd match
-      case Cmd.Restore(_, _, _, identity) => identity.traverse(readIdentities)
-      case _                              => IO.pure(None)
+      case Cmd.Restore(_, _, _, identity, _) => identity.traverse(readIdentities)
+      case _                                 => IO.pure(None)
     identities.flatMap { ids =>
       S3ObjectStore.client(connection.region, connection.endpoint).use { client =>
         val ops = Ops(common, ProcessZfs(), S3ObjectStore(client, common.bucket))
         cmd match
           case Cmd.Backup(opts) => ops.backup(opts)
-          case Cmd.Restore(snapshot, target, force, _) =>
-            ops.restore(RestoreOptions(snapshot, target, force, ids))
+          case Cmd.Restore(snapshot, target, force, _, recursive) =>
+            ops.restore(RestoreOptions(snapshot, target, force, ids, recursive))
           case Cmd.Status(refresh, json, recursive) => ops.status(refresh, json, recursive)
           case Cmd.Reindex => ops.reindex.flatMap(i => IO.println(s"indexed ${i.entries.size} object(s)"))
       }
