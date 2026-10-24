@@ -16,6 +16,8 @@ final class FakeZfs(
   val nativeEncrypted: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
   /** zfs sendを失敗させるdataset */
   val failingSends: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
+  /** スナップショットの一覧を失敗させるdataset */
+  val failingListSnapshots: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
   /** zfs sendを呼んだ(スナップショット, raw)の組 */
   val sends: Ref[IO, List[(String, Boolean)]] = Ref.unsafe(Nil)
 
@@ -33,7 +35,9 @@ final class FakeZfs(
     datasets.get.map(_.values.flatten.find(_.name == name)).flatMap(_.liftTo[IO](new Exception(s"no $name")))
 
   def listSnapshots(dataset: String): IO[List[Snapshot]] =
-    datasets.get.map(_.get(dataset)).flatMap(_.liftTo[IO](new Exception(s"no dataset $dataset")))
+    failingListSnapshots.get.flatMap { failing =>
+      IO.raiseError(new Exception(s"injected list failure for $dataset")).whenA(failing.contains(dataset))
+    } *> datasets.get.map(_.get(dataset)).flatMap(_.liftTo[IO](new Exception(s"no dataset $dataset")))
 
   def datasetExists(dataset: String): IO[Boolean] = datasets.get.map(_.contains(dataset))
 

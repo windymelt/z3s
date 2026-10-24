@@ -86,6 +86,22 @@ class RecursiveSuite extends IOSpec:
       baz should have size 1
   }
 
+  test("a dataset whose snapshots cannot be listed does not stop the others and is reported at the end") {
+    for
+      e <- env
+      _ <- e.zfs.failingListSnapshots.set(Set("pool/foo/bar"))
+      result <- backup(e, full = true, snapshot = Some("s1")).attempt
+      foo <- entries(e, "pool/foo")
+      baz <- entries(e, "pool/foo/baz")
+    yield
+      inside(result.left.value) { case z: Z3SError =>
+        z.exitCode should === (1)
+        z.getMessage should === ("1 of 3 dataset(s) failed: pool/foo/bar")
+      }
+      foo should have size 1
+      baz should have size 1
+  }
+
   test("recursive status lists the tree, including datasets that only exist on S3") {
     for
       e <- env

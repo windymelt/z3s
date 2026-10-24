@@ -139,16 +139,15 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
     val note = if ds.nativeEncrypted && opts.mode != SendMode.Raw then " (encrypted; sending raw)" else ""
     val child = Ops(common.copy(dataset = ds.name), zfs, store, uploadRetryBase)
     val childOpts = opts.copy(snapshot = Some(snapshot), mode = mode, recursive = false)
-    out(s"== $position ${ds.name}$note") *>
-      zfs.listSnapshots(ds.name).flatMap { locals =>
-        if !locals.exists(_.shortName == snapshot) then
-          err(s"warning: ${ds.name} has no snapshot @$snapshot; skipping").as(None)
-        else
-          child.backupDataset(childOpts, autoFull = true).attempt.flatMap {
-            case Right(()) => IO.pure(None)
-            case Left(e)   => err(s"error: ${ds.name}: ${e.getMessage}").as(Some((ds.name, e)))
-          }
-      }
+    val run = zfs.listSnapshots(ds.name).flatMap { locals =>
+      if !locals.exists(_.shortName == snapshot) then err(s"warning: ${ds.name} has no snapshot @$snapshot; skipping")
+      else child.backupDataset(childOpts, autoFull = true)
+    }
+
+    out(s"== $position ${ds.name}$note") *> run.attempt.flatMap {
+      case Right(()) => IO.pure(None)
+      case Left(e)   => err(s"error: ${ds.name}: ${e.getMessage}").as(Some((ds.name, e)))
+    }
 
   /** @param autoFull trueなら、S3にバックアップが1つもないdatasetをfullで送る */
   private def backupDataset(opts: BackupOptions, autoFull: Boolean): IO[Unit] =
