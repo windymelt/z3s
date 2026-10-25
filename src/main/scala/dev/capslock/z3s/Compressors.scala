@@ -47,7 +47,8 @@ object Compressors:
         buffer.reset()
         out
 
-      in.chunks.evalMap(c => IO.blocking { os.write(c.toArray); drainBuffer() }).unchunks ++
+      // zfs sendの出力は8KiBずつ届く。圧縮器へ書く回数を減らすため、ChunkSizeまでまとめてから書く
+      in.chunkMin(ChunkSize).evalMap(c => IO.blocking { os.write(c.toArray); drainBuffer() }).unchunks ++
         Stream.evalUnChunk(IO.blocking { os.close(); drainBuffer() })
     }
 
