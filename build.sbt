@@ -22,7 +22,8 @@ lazy val root = project
       "org.apache.commons" % "commons-compress" % "1.28.0",
       "org.scalatest" %% "scalatest" % "3.2.20" % Test,
       "org.typelevel" %% "cats-effect-testing-scalatest" % "1.8.0" % Test,
-      "org.typelevel" %% "cats-effect-testkit" % "3.7.1" % Test
+      "org.typelevel" %% "cats-effect-testkit" % "3.7.1" % Test,
+      "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test
     ),
     Compile / sourceGenerators += Def.task {
       val file = (Compile / sourceManaged).value / "dev" / "capslock" / "z3s" / "BuildInfo.scala"

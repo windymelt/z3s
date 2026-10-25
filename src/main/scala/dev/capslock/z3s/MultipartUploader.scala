@@ -26,7 +26,7 @@ final case class Resume(state: UploadState, uploaded: List[UploadedPart])
 object MultipartUploader:
   private val DigestSliceSize = 1024 * 1024
 
-  /** パートは100MBを超えることがあるため、1MiBずつ計算してほかのファイバーに実行を譲る */
+  /** パートは100MBを超えることがあるため、分割して計算してほかのファイバーに実行を譲る */
   private[z3s] def md5Hex(bytes: Array[Byte]): IO[String] =
     IO(MessageDigest.getInstance("MD5")).flatMap { md =>
       (0 until bytes.length by DigestSliceSize).toList
