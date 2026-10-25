@@ -179,6 +179,8 @@ class RecursiveSuite extends IOSpec:
   test("a missing --identity is reported before anything is received") {
     for
       e <- env
+      // 先に受信するpool/fooとpool/foo/barはraw、最後のpool/foo/bazだけをage暗号化する
+      _ <- e.zfs.nativeEncrypted.update(_ + "pool/foo")
       id <- X25519Identity.generate
       age = SendMode.Plain(Compression.Zstd(3), Encryption.Age(NonEmptyList.one(id.recipient.encode)))
       _ <- backup(e, age, full = true, snapshot = Some("s1"))
