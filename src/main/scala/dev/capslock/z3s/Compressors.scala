@@ -2,9 +2,9 @@ package dev.capslock.z3s
 
 import cats.effect.IO
 import com.github.luben.zstd.{ZstdInputStream, ZstdOutputStream}
-import fs2.{Pipe, Stream}
-import fs2.io.{readInputStream, readOutputStream, toInputStreamResource, writeOutputStream}
-import java.io.{InputStream, OutputStream}
+import fs2.{Chunk, Pipe, Stream}
+import fs2.io.toInputStreamResource
+import java.io.{BufferedInputStream, ByteArrayOutputStream, InputStream, OutputStream}
 import org.apache.commons.compress.compressors.bzip2.{BZip2CompressorInputStream, BZip2CompressorOutputStream}
 import org.tukaani.xz.{LZMA2Options, XZInputStream, XZOutputStream}
 
@@ -26,12 +26,48 @@ object Compressors:
     case Compression.Xz(_)   => viaInputStream(new XZInputStream(_))
     case Compression.Bzip2(_) => viaInputStream(new BZip2CompressorInputStream(_))
 
+  /** チャンクごとに圧縮器へ書き、メモリ上のバッファに出た圧縮データを流す。
+    *
+    * 圧縮器の出力先を下流へのパイプにすると、下流が読むのをやめてストリームが取り消されたとき、
+    * 後始末のcloseが残りの圧縮データをパイプへ書こうとして、空きが出るのを待ち続ける。
+    * バッファへの書き込みは読む側を待たないので、closeは下流の状態にかかわらず終わる
+    */
   private def viaOutputStream(wrap: OutputStream => OutputStream): Pipe[IO, Byte, Byte] = in =>
-    readOutputStream[IO](ChunkSize) { os =>
-      in.through(writeOutputStream(IO.blocking(wrap(os)), closeAfterUse = true)).compile.drain
+    val open = IO.blocking {
+      val buffer = new ByteArrayOutputStream()
+      (buffer, wrap(buffer))
+    }
+    // 取り消しや失敗で終わった場合も、圧縮器が持つネイティブのメモリなどを解放する
+    val close = (_: ByteArrayOutputStream, os: OutputStream) => IO.blocking(os.close()).attempt.void
+
+    Stream.bracket(open)(close.tupled).flatMap { (buffer, os) =>
+      /** 圧縮器がここまでにバッファへ書いたバイト列を取り出し、バッファを空にする */
+      def drainBuffer(): Chunk[Byte] =
+        val out = Chunk.array(buffer.toByteArray)
+        buffer.reset()
+        out
+
+      in.chunks.evalMap(c => IO.blocking { os.write(c.toArray); drainBuffer() }).unchunks ++
+        Stream.evalUnChunk(IO.blocking { os.close(); drainBuffer() })
     }
 
+  /** 展開器はInputStreamから読むので、パイプを介する。取り消し時に読み出しのスレッドへ割り込めるよう、interruptibleで読む */
   private def viaInputStream(wrap: InputStream => InputStream): Pipe[IO, Byte, Byte] = in =>
-    Stream.resource(toInputStreamResource(in)).flatMap { is =>
-      readInputStream(IO.blocking(wrap(is)), ChunkSize, closeAfterUse = true)
+    Stream.resource(toInputStreamResource(in)).flatMap { raw =>
+      // 展開器には1バイトずつ読むものがある。fs2のInputStreamは読むたびにファイバーとやり取りするので、まとめて読む
+      val open = IO.interruptible(wrap(new BufferedInputStream(raw, ChunkSize)))
+      val close = (is: InputStream) => IO.blocking(is.close()).attempt.void
+
+      Stream.bracket(open)(close).flatMap { is =>
+        /** 展開したバイト列を最大ChunkSizeバイト読む。終わりに達したらNone */
+        def readChunk(): Option[Chunk[Byte]] =
+          val buf = new Array[Byte](ChunkSize)
+          val n = is.read(buf)
+          if n < 0 then None else Some(Chunk.array(buf, 0, n))
+
+        Stream
+          .repeatEval(IO.interruptible(readChunk()))
+          .unNoneTerminate
+          .unchunks
+      }
     }

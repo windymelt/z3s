@@ -3,6 +3,7 @@ package dev.capslock.z3s
 import cats.effect.IO
 import cats.syntax.all.*
 import fs2.{Chunk, Stream}
+import scala.concurrent.duration.*
 import scodec.bits.ByteVector
 
 class CompressorsSuite extends IOSpec:
@@ -49,3 +50,30 @@ class CompressorsSuite extends IOSpec:
       .traverse(alg => Stream.chunk(Chunk.array(input)).covary[IO].through(Compressors.compress(alg)).compile.count)
       .map(sizes => forAll(sizes)(_ should be < (input.length / 10).toLong))
   }
+
+  /** 圧縮しにくいデータを終わりなく流す */
+  val endless: Stream[IO, Byte] =
+    val rnd = new scala.util.Random(1)
+    Stream.repeatEval(IO(Chunk.array(Array.fill(64 * 1024)(rnd.nextInt(256).toByte)))).unchunks
+
+  /** ioが失敗や取り消しで終わった場合は失敗にする。取り消しが終わらない場合も、ioの完了を待つのを打ち切って失敗にする。
+    * ioのファイバーは取り消さずに残す
+    */
+  def completesWithin(limit: FiniteDuration)(io: IO[Unit]) =
+    io.start
+      .flatMap(_.joinWith(IO.raiseError(new AssertionError("canceled"))).as(true).timeoutTo(limit, IO.pure(false)))
+      .map(completed => withClue(s"did not complete within $limit: ")(completed shouldBe true))
+
+  for alg <- algorithms.filter(_ != Compression.None) do
+    test(s"compression stops when the downstream stops reading: ${alg.label}") {
+      // 下流が読むのをやめると上流は取り消される。圧縮器の終了処理が出力を書けずに待つと、ここで止まる
+      completesWithin(5.seconds)(endless.through(Compressors.compress(alg)).take(1).compile.drain)
+    }
+
+    test(s"decompression stops when the downstream stops reading: ${alg.label}") {
+      endless.take(8L * 1024 * 1024).through(Compressors.compress(alg)).compile.to(Array).flatMap { compressed =>
+        completesWithin(5.seconds)(
+          Stream.chunk(Chunk.array(compressed)).covary[IO].through(Compressors.decompress(alg)).take(1).compile.drain
+        )
+      }
+    }
