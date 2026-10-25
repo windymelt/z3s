@@ -50,7 +50,6 @@ final case class RestoreOptions(
     target: Option[String],
     force: Boolean,
     identities: Option[NonEmptyList[X25519Identity]],
-    /** 子孫のdatasetもそれぞれリストアする */
     recursive: Boolean = false
 )
 
@@ -328,28 +327,38 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
       _ <- IO.raiseError(Z3SError.Runtime(s"no backups of $root or its descendants on S3")).whenA(datasets.isEmpty)
       // 受信を始める前に、全datasetの計画を立てて--identityの要否を確かめる
       plans <- datasets.traverse { ds =>
-        val child = Ops(common.copy(dataset = ds), zfs, store, uploadRetryBase)
-        child.loadIndex
-          .flatMap { index =>
-            if !index.entries.exists(_.header.snapshot == s"$ds@${opts.snapshot}") then IO.pure(None)
-            else child.planRestore(index, targetOf(ds), opts.snapshot).map(Some(_))
-          }
-          .attempt
-          .map(plan => (ds, child, plan))
+        Ops(common.copy(dataset = ds), zfs, store, uploadRetryBase).planTreeMember(targetOf(ds), opts.snapshot)
       }
-      _ <- requireIdentity(opts, plans.flatMap(_._3.toOption.flatten).flatten)
+      toReceive = plans.flatMap(_.plan.toOption.flatten).flatten
+      _ <- requireIdentity(opts, toReceive)
       _ <- out(s"recursive restore of ${datasets.size} dataset(s) at @${opts.snapshot} into $targetRoot")
-      (failed, skipped) <- plans.zipWithIndex.foldLeftM((List.empty[(String, Throwable)], List.empty[String])) {
-        case ((failed, skipped), ((ds, child, plan), i)) =>
-          val position = s"[${i + 1}/${datasets.size}]"
-          // 親がないとzfs recvは子を作れないため、失敗したdatasetの子孫は受信しない
-          if (failed.map(_._1) ++ skipped).exists(b => ds.startsWith(s"$b/")) then
-            out(s"== $position $ds (skipped)").as((failed, skipped :+ ds))
-          else
-            child.restoreTreeMember(plan, position, targetOf(ds), opts).map(e => (failed ++ e.map(ds -> _), skipped))
+      result <- plans.zipWithIndex.foldLeftM(TreeRestore.empty) { case (acc, (plan, i)) =>
+        restoreTreeStep(acc, plan, s"[${i + 1}/${datasets.size}]", opts)
       }
-      _ <- raiseTreeFailures(failed, skipped, datasets.size)
+      _ <- raiseTreeFailures(result.failed, result.skipped, datasets.size)
     yield ()
+
+  /** このdatasetの計画を立てる。snapshotのバックアップがなければNone、計画を立てられなければLeftにする */
+  private def planTreeMember(target: String, snapshot: String): IO[TreeMemberPlan] =
+    val ds = common.dataset
+    loadIndex
+      .flatMap { index =>
+        if !index.entries.exists(_.header.snapshot == s"$ds@$snapshot") then IO.pure(None)
+        else planRestore(index, target, snapshot).map(Some(_))
+      }
+      .attempt
+      .map(TreeMemberPlan(this, ds, target, _))
+
+  /** 1つのdatasetを受信し、結果をaccに加える。先祖が失敗していれば受信せずに飛ばす */
+  private def restoreTreeStep(
+      acc: TreeRestore,
+      p: TreeMemberPlan,
+      position: String,
+      opts: RestoreOptions
+  ): IO[TreeRestore] =
+    // 親がないとzfs recvは子を作れないため、失敗したdatasetの子孫は受信しない
+    if acc.hasFailedAncestor(p.dataset) then out(s"== $position ${p.dataset} (skipped)").as(acc.skip(p.dataset))
+    else p.ops.restoreTreeMember(p.plan, position, p.target, opts).map(_.fold(acc)(acc.fail(p.dataset, _)))
 
   /** 木の中の1つのdatasetを計画どおりに受信する。失敗した場合はエラーを返す */
   private def restoreTreeMember(
@@ -377,6 +386,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
       targetLocals <- if exists then zfs.listSnapshots(target) else IO.pure(Nil)
     yield Planner.remainingToReceive(chain, targetLocals)
 
+  /** 受信するオブジェクトにage暗号化されたものがあるのに--identityがなければ、引数エラーにする */
   private def requireIdentity(opts: RestoreOptions, remaining: List[IndexEntry]): IO[Unit] =
     IO.raiseError(Z3SError.Usage("--identity is required to restore age-encrypted objects"))
       .whenA(opts.identities.isEmpty && remaining.exists(e => isAge(e.header.mode)))
@@ -487,6 +497,24 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
       .compile
       .toList
       .map(_.distinct.sorted)
+
+/** restore --recursiveで、1つのdatasetについて立てた計画 */
+private[z3s] final case class TreeMemberPlan(
+    ops: Ops,
+    dataset: String,
+    target: String,
+    plan: Either[Throwable, Option[List[IndexEntry]]]
+)
+
+/** restore --recursiveで、失敗したdatasetと、先祖の失敗により飛ばしたdataset */
+private[z3s] final case class TreeRestore(failed: List[(String, Throwable)], skipped: List[String]):
+  def hasFailedAncestor(dataset: String): Boolean =
+    (failed.map(_._1) ++ skipped).exists(a => dataset.startsWith(s"$a/"))
+  def fail(dataset: String, e: Throwable): TreeRestore = copy(failed = failed :+ (dataset -> e))
+  def skip(dataset: String): TreeRestore = copy(skipped = skipped :+ dataset)
+
+private[z3s] object TreeRestore:
+  val empty: TreeRestore = TreeRestore(Nil, Nil)
 
 final case class StatusRow(entry: IndexEntry, health: Health, local: Boolean):
   def h: Header = entry.header
