@@ -26,7 +26,12 @@ object Compressors:
     case Compression.Xz(_)   => viaInputStream(new XZInputStream(_))
     case Compression.Bzip2(_) => viaInputStream(new BZip2CompressorInputStream(_))
 
-  /** チャンクごとにメモリ上のバッファへ圧縮して出力する。読む側を待たないので、取り消し時のcloseでも止まらない */
+  /** チャンクごとに圧縮器へ書き、メモリ上のバッファに出た圧縮データを流す。
+    *
+    * 圧縮器の出力先を下流へのパイプにすると、下流が読むのをやめてストリームが取り消されたとき、
+    * 後始末のcloseが残りの圧縮データをパイプへ書こうとして、空きが出るのを待ち続ける。
+    * バッファへの書き込みは読む側を待たないので、closeは下流の状態にかかわらず終わる
+    */
   private def viaOutputStream(wrap: OutputStream => OutputStream): Pipe[IO, Byte, Byte] = in =>
     val open = IO.blocking {
       val buffer = new ByteArrayOutputStream()
@@ -54,12 +59,14 @@ object Compressors:
       val close = (is: InputStream) => IO.blocking(is.close()).attempt.void
 
       Stream.bracket(open)(close).flatMap { is =>
+        /** 展開したバイト列を最大ChunkSizeバイト読む。終わりに達したらNone */
+        def readChunk(): Option[Chunk[Byte]] =
+          val buf = new Array[Byte](ChunkSize)
+          val n = is.read(buf)
+          if n < 0 then None else Some(Chunk.array(buf, 0, n))
+
         Stream
-          .repeatEval(IO.interruptible {
-            val buf = new Array[Byte](ChunkSize)
-            val n = is.read(buf)
-            if n < 0 then None else Some(Chunk.array(buf, 0, n))
-          })
+          .repeatEval(IO.interruptible(readChunk()))
           .unNoneTerminate
           .unchunks
       }
