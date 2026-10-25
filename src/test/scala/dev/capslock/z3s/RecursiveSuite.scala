@@ -1,6 +1,8 @@
 package dev.capslock.z3s
 
+import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
+import dev.capslock.z3s.age.X25519Identity
 
 /** --recursiveによる子孫のdatasetのバックアップとstatus */
 class RecursiveSuite extends IOSpec:
@@ -119,9 +121,83 @@ class RecursiveSuite extends IOSpec:
       json should not include "pool/foobar"
   }
 
-  test("-r is accepted for backup and status") {
+  def restore(e: Env, snapshot: String, ids: Option[NonEmptyList[X25519Identity]] = None) =
+    e.ops.restore(RestoreOptions(snapshot, Some("pool/r"), force = false, ids, recursive = true))
+
+  test("recursive restore receives the tree under --target, from parents to children") {
+    for
+      e <- env
+      _ <- backup(e, full = true, snapshot = Some("s1"))
+      _ <- restore(e, "s1")
+      received <- e.zfs.received.get
+      datasets <- e.zfs.datasets.get
+    yield
+      received.map(_._1) should === (List("pool/r", "pool/r/bar", "pool/r/baz"))
+      datasets("pool/r/bar").map(_.guid) should === (List(11L))
+  }
+
+  test("datasets without a backup of the snapshot are skipped without failing") {
+    for
+      e <- env
+      _ <- backup(e, full = true, snapshot = Some("s1"))
+      _ <- backup(e, snapshot = Some("s2"))
+      // pool/foo/bazには@s2がないので飛ばす
+      _ <- restore(e, "s2")
+      received <- e.zfs.received.get
+    yield received.map(_._1) should === (List("pool/r", "pool/r", "pool/r/bar", "pool/r/bar"))
+  }
+
+  test("descendants of a dataset that fails to restore are skipped and reported") {
+    for
+      e <- env
+      _ <- backup(e, full = true, snapshot = Some("s1"))
+      _ <- e.zfs.failingRecvs.set(Set("pool/r"))
+      result <- restore(e, "s1").attempt
+      received <- e.zfs.received.get
+    yield
+      inside(result.left.value) { case z: Z3SError =>
+        z.exitCode should === (1)
+        z.getMessage should === (
+          "1 of 3 dataset(s) failed: pool/foo; skipped because an ancestor failed: pool/foo/bar, pool/foo/baz"
+        )
+      }
+      received should === (Nil)
+  }
+
+  test("a failing dataset does not stop its siblings from being restored") {
+    for
+      e <- env
+      _ <- backup(e, full = true, snapshot = Some("s1"))
+      _ <- e.zfs.failingRecvs.set(Set("pool/r/bar"))
+      result <- restore(e, "s1").attempt
+      received <- e.zfs.received.get
+    yield
+      result.left.value.getMessage should === ("1 of 3 dataset(s) failed: pool/foo/bar")
+      received.map(_._1) should === (List("pool/r", "pool/r/baz"))
+  }
+
+  test("a missing --identity is reported before anything is received") {
+    for
+      e <- env
+      // 先に受信するpool/fooとpool/foo/barはraw、最後のpool/foo/bazだけをage暗号化する
+      _ <- e.zfs.nativeEncrypted.update(_ + "pool/foo")
+      id <- X25519Identity.generate
+      age = SendMode.Plain(Compression.Zstd(3), Encryption.Age(NonEmptyList.one(id.recipient.encode)))
+      _ <- backup(e, age, full = true, snapshot = Some("s1"))
+      result <- restore(e, "s1").attempt
+      received <- e.zfs.received.get
+      _ <- restore(e, "s1", Some(NonEmptyList.one(id)))
+      receivedWithId <- e.zfs.received.get
+    yield
+      result.left.value shouldBe a[Z3SError.Usage]
+      received should === (Nil)
+      receivedWithId.map(_._1) should === (List("pool/r", "pool/r/bar", "pool/r/baz"))
+  }
+
+  test("-r is accepted for backup, restore and status") {
     val common = List("--bucket", "b", "--dataset", "pool/foo")
     def parse(args: List[String]) = Cli.command.parse(args, Map.empty).map(_._3)
     parse("backup" :: "-r" :: common).map { case Cmd.Backup(o) => o.recursive; case _ => false } should === (Right(true))
     parse("status" :: "-r" :: common) should === (Right(Cmd.Status(false, false, true)))
+    parse("restore" :: "s1" :: "-r" :: common) should === (Right(Cmd.Restore("s1", None, false, None, true)))
   }
