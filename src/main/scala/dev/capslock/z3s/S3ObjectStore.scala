@@ -15,8 +15,9 @@ import software.amazon.awssdk.services.s3.model.*
 
 final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectStore:
 
+  // SDKのメソッドはFutureを返すまで呼び出し元のスレッドを使い、初回は100ms以上かかることがあるので、IO.blockingで呼ぶ
   private def call[A](f: => CompletableFuture[A]): IO[A] =
-    IO.fromCompletableFuture(IO(f)).adaptError { case e: CompletionException if e.getCause != null => e.getCause }
+    IO.fromCompletableFuture(IO.blocking(f)).adaptError { case e: CompletionException if e.getCause != null => e.getCause }
 
   private def status(e: Throwable): Option[Int] = e match
     case s: S3Exception => Some(s.statusCode())
@@ -131,7 +132,8 @@ final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectS
 
 object S3ObjectStore:
   def client(region: Option[String], endpoint: Option[URI]): Resource[IO, S3AsyncClient] =
-    Resource.fromAutoCloseable(IO {
+    // クライアントの作成は設定ファイルの読み込みなどで数百msかかることがあるので、IO.blockingで行う
+    Resource.fromAutoCloseable(IO.blocking {
       // さくらのオブジェクトストレージでは、Expect: 100-continueを付けたUploadPartが
       // Status Code: 100で失敗し、付けない場合は成功した
       val b = S3AsyncClient
