@@ -56,10 +56,12 @@ class CompressorsSuite extends IOSpec:
     val rnd = new scala.util.Random(1)
     Stream.repeatEval(IO(Chunk.array(Array.fill(64 * 1024)(rnd.nextInt(256).toByte)))).unchunks
 
-  /** 取り消しが終わらない場合も、ioの完了を待つのを打ち切って失敗にする。ioのファイバーは取り消さずに残す */
+  /** ioが失敗や取り消しで終わった場合は失敗にする。取り消しが終わらない場合も、ioの完了を待つのを打ち切って失敗にする。
+    * ioのファイバーは取り消さずに残す
+    */
   def completesWithin(limit: FiniteDuration)(io: IO[Unit]) =
     io.start
-      .flatMap(_.join.map(_ => true).timeoutTo(limit, IO.pure(false)))
+      .flatMap(_.joinWith(IO.raiseError(new AssertionError("canceled"))).as(true).timeoutTo(limit, IO.pure(false)))
       .map(completed => withClue(s"did not complete within $limit: ")(completed shouldBe true))
 
   for alg <- algorithms.filter(_ != Compression.None) do
