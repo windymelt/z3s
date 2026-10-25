@@ -36,7 +36,6 @@ final case class BackupOptions(
     noResume: Boolean = false,
     /** 再開用の状態の保存先。Noneなら中断時にuploadをabortする */
     stateDir: Option[Path] = None,
-    /** 子孫のdatasetもそれぞれバックアップする */
     recursive: Boolean = false
 ):
   /** age暗号化はfile keyを保存しないと再開できないため、再開の対象にしない */
