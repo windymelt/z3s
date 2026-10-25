@@ -32,20 +32,28 @@ object Compressors:
       val buffer = new ByteArrayOutputStream()
       (buffer, wrap(buffer))
     }
-    Stream.bracket(open)((_, os) => IO.blocking(os.close()).attempt.void).flatMap { (buffer, os) =>
-      def take(): Chunk[Byte] =
+    // 取り消しや失敗で終わった場合も、圧縮器が持つネイティブのメモリなどを解放する
+    val close = (_: ByteArrayOutputStream, os: OutputStream) => IO.blocking(os.close()).attempt.void
+
+    Stream.bracket(open)(close.tupled).flatMap { (buffer, os) =>
+      /** 圧縮器がここまでにバッファへ書いたバイト列を取り出し、バッファを空にする */
+      def drainBuffer(): Chunk[Byte] =
         val out = Chunk.array(buffer.toByteArray)
         buffer.reset()
         out
-      in.chunks.evalMap(c => IO.blocking { os.write(c.toArray); take() }).unchunks ++
-        Stream.evalUnChunk(IO.blocking { os.close(); take() })
+
+      in.chunks.evalMap(c => IO.blocking { os.write(c.toArray); drainBuffer() }).unchunks ++
+        Stream.evalUnChunk(IO.blocking { os.close(); drainBuffer() })
     }
 
   /** 展開器はInputStreamから読むので、パイプを介する。取り消し時に読み出しのスレッドへ割り込めるよう、interruptibleで読む */
   private def viaInputStream(wrap: InputStream => InputStream): Pipe[IO, Byte, Byte] = in =>
     Stream.resource(toInputStreamResource(in)).flatMap { raw =>
       // 展開器には1バイトずつ読むものがある。fs2のInputStreamは読むたびにファイバーとやり取りするので、まとめて読む
-      Stream.bracket(IO.interruptible(wrap(new BufferedInputStream(raw, ChunkSize))))(is => IO.blocking(is.close()).attempt.void).flatMap { is =>
+      val open = IO.interruptible(wrap(new BufferedInputStream(raw, ChunkSize)))
+      val close = (is: InputStream) => IO.blocking(is.close()).attempt.void
+
+      Stream.bracket(open)(close).flatMap { is =>
         Stream
           .repeatEval(IO.interruptible {
             val buf = new Array[Byte](ChunkSize)
