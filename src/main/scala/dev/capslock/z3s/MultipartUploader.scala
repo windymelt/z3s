@@ -23,6 +23,17 @@ object PartCounters:
 final case class Resume(state: UploadState, uploaded: List[UploadedPart])
 
 /** ストリームをパートに分けてmultipart uploadで送る。状態の保存先があれば、中断時にuploadを残して再開できるようにする */
+object MultipartUploader:
+  private val DigestSliceSize = 1024 * 1024
+
+  /** パートは100MBを超えることがあるため、1MiBずつ計算してほかのファイバーに実行を譲る */
+  private[z3s] def md5Hex(bytes: Array[Byte]): IO[String] =
+    IO(MessageDigest.getInstance("MD5")).flatMap { md =>
+      (0 until bytes.length by DigestSliceSize).toList
+        .traverse_(off => IO(md.update(bytes, off, math.min(DigestSliceSize, bytes.length - off))) *> IO.cede) *>
+        IO(ByteVector(md.digest()).toHex)
+    }
+
 final class MultipartUploader(
     store: ObjectStore,
     concurrency: Int,
@@ -107,10 +118,11 @@ final class MultipartUploader(
           }
 
         processPart = (number: Int, bytes: Array[Byte]) =>
-          val md5 = ByteVector(MessageDigest.getInstance("MD5").digest(bytes)).toHex
-          (recorded.get(number), onS3.get(number)) match
-            case (Some(r), Some(p)) => reuse(number, bytes, md5, r, p)
-            case _                  => send(number, bytes, md5)
+          MultipartUploader.md5Hex(bytes).flatMap { md5 =>
+            (recorded.get(number), onS3.get(number)) match
+              case (Some(r), Some(p)) => reuse(number, bytes, md5, r, p)
+              case _                  => send(number, bytes, md5)
+          }
 
         parts <- data
           .chunkN(partSize, allowFewer = true)

@@ -2,6 +2,7 @@ package dev.capslock.z3s
 
 import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
+import cats.syntax.all.*
 import dev.capslock.z3s.age.X25519Identity
 import java.nio.file.{Files, Path}
 import scala.concurrent.duration.Duration
@@ -64,6 +65,15 @@ class ResumeSuite extends IOSpec:
         left should === (Nil)
         received.map(_._2.toList) should === (List(e.zfs.streamFor(snapshot, None, mode == raw).toList))
     }
+
+  test("the MD5 computed in slices matches the MD5 of the whole part") {
+    val mib = 1024 * 1024
+    List(0, 1, mib - 1, mib, mib + 1, 3 * mib + 12345).traverse { size =>
+      val bytes = Array.tabulate(size)(i => (i * 31 + 7).toByte)
+      val expected = ByteVector(java.security.MessageDigest.getInstance("MD5").digest(bytes)).toHex
+      MultipartUploader.md5Hex(bytes).map(_ -> expected)
+    }.map(results => forAll(results)((actual, expected) => actual should === (expected)))
+  }
 
   test("an interrupted age-encrypted backup is aborted and leaves no state") {
     for

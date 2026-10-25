@@ -232,7 +232,8 @@ class OpsSuite extends IOSpec:
       e <- env(payloadSize = 12 * 1024 * 1024)
       _ <- e.ops.backup(backupOpts(SendMode.Raw, full = true))
       parts <- e.store.partSizes.get
-    yield parts.dropRight(1).distinct should === (List(5 * 1024 * 1024))
+    // パートは並列に送るので、記録の順はパート番号の順と限らない。最後のパートだけが小さい
+    yield parts.sorted.reverse.dropRight(1).distinct should === (List(5 * 1024 * 1024))
   }
 
   test("status --json renders empty and populated results") {
