@@ -12,6 +12,11 @@ import org.tukaani.xz.{LZMA2Options, XZInputStream, XZOutputStream}
 object Compressors:
   private val ChunkSize = 64 * 1024
 
+  /** 圧縮器へ1回に書く大きさ。手元の計測では、zstd:1は64KiBずつより1MiBずつ書くほうが約3倍速かった。
+    * 4MiBにするとさらに速かったが、1本のストリームがこの数倍のメモリを使うので1MiBにとどめる
+    */
+  private val CompressChunkSize = 1024 * 1024
+
   def compress(c: Compression): Pipe[IO, Byte, Byte] = c match
     case Compression.None         => identity
     case Compression.Gzip(level)  => fs2.compression.Compression[IO].gzip(deflateLevel = Some(level))
@@ -47,8 +52,8 @@ object Compressors:
         buffer.reset()
         out
 
-      // zfs sendの出力は8KiBずつ届く。圧縮器へ書く回数を減らすため、ChunkSizeまでまとめてから書く
-      in.chunkMin(ChunkSize).evalMap(c => IO.blocking { os.write(c.toArray); drainBuffer() }).unchunks ++
+      // zfs sendの出力は8KiBずつ届く。圧縮器へ書く回数を減らすため、CompressChunkSizeまでまとめてから書く
+      in.chunkMin(CompressChunkSize).evalMap(c => IO.blocking { os.write(c.toArray); drainBuffer() }).unchunks ++
         Stream.evalUnChunk(IO.blocking { os.close(); drainBuffer() })
     }
 
