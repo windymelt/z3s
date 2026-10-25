@@ -2,9 +2,9 @@ package dev.capslock.z3s
 
 import cats.effect.IO
 import com.github.luben.zstd.{ZstdInputStream, ZstdOutputStream}
-import fs2.{Pipe, Stream}
-import fs2.io.{readInputStream, readOutputStream, toInputStreamResource, writeOutputStream}
-import java.io.{InputStream, OutputStream}
+import fs2.{Chunk, Pipe, Stream}
+import fs2.io.toInputStreamResource
+import java.io.{BufferedInputStream, ByteArrayOutputStream, InputStream, OutputStream}
 import org.apache.commons.compress.compressors.bzip2.{BZip2CompressorInputStream, BZip2CompressorOutputStream}
 import org.tukaani.xz.{LZMA2Options, XZInputStream, XZOutputStream}
 
@@ -26,12 +26,33 @@ object Compressors:
     case Compression.Xz(_)   => viaInputStream(new XZInputStream(_))
     case Compression.Bzip2(_) => viaInputStream(new BZip2CompressorInputStream(_))
 
+  /** チャンクごとにメモリ上のバッファへ圧縮して出力する。読む側を待たないので、取り消し時のcloseでも止まらない */
   private def viaOutputStream(wrap: OutputStream => OutputStream): Pipe[IO, Byte, Byte] = in =>
-    readOutputStream[IO](ChunkSize) { os =>
-      in.through(writeOutputStream(IO.blocking(wrap(os)), closeAfterUse = true)).compile.drain
+    val open = IO.blocking {
+      val buffer = new ByteArrayOutputStream()
+      (buffer, wrap(buffer))
+    }
+    Stream.bracket(open)((_, os) => IO.blocking(os.close()).attempt.void).flatMap { (buffer, os) =>
+      def take(): Chunk[Byte] =
+        val out = Chunk.array(buffer.toByteArray)
+        buffer.reset()
+        out
+      in.chunks.evalMap(c => IO.blocking { os.write(c.toArray); take() }).unchunks ++
+        Stream.evalUnChunk(IO.blocking { os.close(); take() })
     }
 
+  /** 展開器はInputStreamから読むので、パイプを介する。取り消し時に読み出しのスレッドへ割り込めるよう、interruptibleで読む */
   private def viaInputStream(wrap: InputStream => InputStream): Pipe[IO, Byte, Byte] = in =>
-    Stream.resource(toInputStreamResource(in)).flatMap { is =>
-      readInputStream(IO.blocking(wrap(is)), ChunkSize, closeAfterUse = true)
+    Stream.resource(toInputStreamResource(in)).flatMap { raw =>
+      // 展開器には1バイトずつ読むものがある。fs2のInputStreamは読むたびにファイバーとやり取りするので、まとめて読む
+      Stream.bracket(IO.interruptible(wrap(new BufferedInputStream(raw, ChunkSize))))(is => IO.blocking(is.close()).attempt.void).flatMap { is =>
+        Stream
+          .repeatEval(IO.interruptible {
+            val buf = new Array[Byte](ChunkSize)
+            val n = is.read(buf)
+            if n < 0 then None else Some(Chunk.array(buf, 0, n))
+          })
+          .unNoneTerminate
+          .unchunks
+      }
     }
