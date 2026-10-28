@@ -2,7 +2,7 @@ package dev.capslock.z3s
 
 import cats.effect.{IO, Ref, Resource}
 import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
-import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions}
+import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions, VerifyOptions}
 import fs2.{Chunk, Stream}
 import java.net.URI
 import java.nio.file.Files
@@ -87,6 +87,7 @@ class S3IntegrationSuite extends IOSpec:
         r <- upload(store, "obj", src, Map("z3s-format" -> "1"))
         head <- store.head("obj")
         prefix <- store.getPrefix("obj", 100)
+        range <- store.getRange("obj", 10, 100).compile.to(Array)
         whole <- store.get("obj").compile.to(Array)
         listed <- store.list("o").compile.toList
         again <- upload(store, "obj", src).attempt
@@ -95,6 +96,7 @@ class S3IntegrationSuite extends IOSpec:
         r.size should === (data.length.toLong)
         head.map(_.size) should === (Some(data.length.toLong))
         prefix.toList should === (data.take(100).toList)
+        range.toList should === (data.slice(10, 110).toList)
         ByteVector(whole) should === (ByteVector(data))
         listed.map(_.key) should === (List("obj"))
         again.left.value.getMessage should include("already exists")
@@ -218,6 +220,9 @@ class S3IntegrationSuite extends IOSpec:
         got <- zfs.received.get
         digests <- store.getWithEtag("p/tank/data/.z3s-parts/a.cbor")
         head <- store.head("p/tank/data@a")
+        // 全体を読む検証と、全パートを抜き取る検証の両方が、サーバのETagと一致する
+        _ <- ops.verify(VerifyOptions(None, None))
+        _ <- ops.verify(VerifyOptions(None, Some(10)))
       yield
         index.entries.map(_.key) should === (List("p/tank/data@a", "p/tank/data@b"))
         // 保存したパートのMD5一覧から、サーバが返すETagと同じ値を計算できる

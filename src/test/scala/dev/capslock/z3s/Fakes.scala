@@ -98,6 +98,9 @@ final class InMemoryStore extends ObjectStore:
   def get(key: String): Stream[IO, Byte] =
     Stream.eval(objects.get.map(_(key).bytes)).flatMap(b => Stream.chunk(Chunk.array(b))).rechunkRandomly()
 
+  def getRange(key: String, offset: Long, length: Long): Stream[IO, Byte] =
+    get(key).drop(offset).take(length)
+
   def getWithEtag(key: String): IO[Option[(Array[Byte], String)]] =
     objects.get.map(_.get(key).map(o => (o.bytes, o.etag)))
 
@@ -153,11 +156,13 @@ final class InMemoryStore extends ObjectStore:
     }))
 
   def completeMultipartUpload(key: String, uploadId: String, parts: List[UploadedPart]): IO[String] =
-    nextEtag.flatMap { etag =>
-      uploads.get.map(_.get(uploadId)).flatMap {
-        case None => IO.raiseError(new Exception(s"no such upload: $uploadId"))
-        case Some(u) =>
-          val bytes = parts.sortBy(_.number).toArray.flatMap(p => u.parts(p.number))
+    uploads.get.map(_.get(uploadId)).flatMap {
+      case None => IO.raiseError(new Exception(s"no such upload: $uploadId"))
+      case Some(u) =>
+        val sorted = parts.sortBy(_.number).map(p => u.parts(p.number))
+        val bytes = sorted.toArray.flatten
+        // S3と同じく、各パートのMD5からETagを作る
+        sorted.traverse(MultipartUploader.md5).map(m => s"\"${MultipartEtag.of(m).show}\"").flatMap { etag =>
           objects
             .modify { m =>
               if m.contains(key) then (m, false)
@@ -167,7 +172,7 @@ final class InMemoryStore extends ObjectStore:
               if ok then uploads.update(_ - uploadId).as(etag)
               else IO.raiseError(Z3SError.Unresumable(s"object already exists: $key"))
             )
-      }
+        }
     }
 
   def abortMultipartUpload(key: String, uploadId: String): IO[Unit] =
