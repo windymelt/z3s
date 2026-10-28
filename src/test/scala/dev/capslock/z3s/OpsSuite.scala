@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
 import cats.syntax.all.*
 import dev.capslock.z3s.age.X25519Identity
+import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
 import scodec.bits.ByteVector
 
 /** zfsとS3をフェイクに置き換え、backupからrestoreまでを実行する */
@@ -238,8 +239,8 @@ class OpsSuite extends IOSpec:
   }
 
   /** オブジェクトをpartSizeずつに分けた各パートのMD5 */
-  def partMd5s(bytes: Array[Byte], partSize: Int): List[String] =
-    bytes.grouped(partSize).toList.map(p => ByteVector(java.security.MessageDigest.getInstance("MD5").digest(p)).toHex)
+  def partMd5s(bytes: Array[Byte], partSize: Int): List[Md5] =
+    bytes.grouped(partSize).toList.map(p => Md5(ByteVector(java.security.MessageDigest.getInstance("MD5").digest(p))))
 
   test("the MD5 of each part is saved under the dataset, outside the backup listing") {
     for
@@ -250,13 +251,13 @@ class OpsSuite extends IOSpec:
       reindexed <- e.ops.reindex
     yield
       val entry = index.entries.head
-      val digests = Cbor.decodePartDigests(objects("backups/tank/data/.z3s-parts/daily-3.cbor").bytes).value
+      val digests = PartDigestsCodec.decode(objects("backups/tank/data/.z3s-parts/daily-3.cbor").bytes).value
       val bytes = objects(entry.key).bytes
       entry.header.partSize should === (Some(5L * 1024 * 1024))
       digests.partSize should === (5L * 1024 * 1024)
       digests.size should === (bytes.length.toLong)
-      digests.md5s should have size 3
-      digests.md5s should === (partMd5s(bytes, 5 * 1024 * 1024))
+      digests.partMd5s should have size 3
+      digests.partMd5s should === (partMd5s(bytes, 5 * 1024 * 1024))
       index.entries should have size 1
       reindexed.entries.map(_.key) should === (List(entry.key))
   }

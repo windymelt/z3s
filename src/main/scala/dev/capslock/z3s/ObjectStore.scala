@@ -10,8 +10,7 @@ enum PutResult:
   case Written(etag: String)
   case PreconditionFailed
 
-/** md5sはパートの順に並べた各パートのMD5(16進) */
-final case class UploadResult(etag: String, size: Long, md5s: List[String])
+final case class UploadResult(etag: String, size: Long, partMd5s: List[Md5])
 
 final case class UploadedPart(number: Int, etag: String, size: Long)
 

@@ -12,6 +12,7 @@ import java.time.Instant
 import java.time.format.DateTimeFormatter
 import scodec.bits.ByteVector
 import dev.capslock.z3s.age.{Age, X25519Identity, X25519Recipient}
+import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
 
 val IndexFileName = ".z3s-index.cbor"
 val PartDigestsDirName = ".z3s-parts"
@@ -265,7 +266,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
       )
       uploadedAt <- now
       _ <- out(s"uploaded $key (${result.size} bytes)")
-      _ <- savePartDigests(snapshot, PartDigests(effectivePartSize.toLong, result.size, result.md5s))
+      _ <- savePartDigests(snapshot, PartDigests(effectivePartSize.toLong, result.size, result.partMd5s))
       entry = IndexEntry(key, effectiveHeader, result.size, result.etag, uploadedAt.toString)
       _ <- indexStore.update(_.upsert(entry)).void.adaptError { case e =>
         Z3SError.Runtime(s"$key was uploaded, but updating the index failed (${e.getMessage}); run `z3s reindex`", e)
@@ -276,7 +277,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
   private def savePartDigests(snapshot: Snapshot, digests: PartDigests): IO[Unit] =
     val key = common.partDigestsKey(snapshot)
     store
-      .put(key, Cbor.encodePartDigests(digests))
+      .put(key, PartDigestsCodec.encode(digests))
       .handleErrorWith(e => err(s"warning: failed to save the part MD5s to $key: ${e.getMessage}"))
 
   /** 中断したuploadの状態があり、同じスナップショットとmodeなら再開する。そうでなければ古いuploadをabortする */

@@ -2,17 +2,16 @@ package dev.capslock.z3s
 
 import cats.data.NonEmptyList
 import io.bullet.borer.{Cbor as BorerCbor, Decoder, Encoder, Reader, Writer}
-import scodec.bits.ByteVector
 
-/** ヘッダとインデックスとパートのMD5一覧のCBOR表現。mapは文字列キーとし、デコード時は未知のキーを読み飛ばす */
+/** ヘッダとインデックスのCBOR表現。mapは文字列キーとし、デコード時は未知のキーを読み飛ばす */
 object Cbor:
   private[z3s] def fail(msg: String): Nothing = throw new IllegalArgumentException(msg)
 
   /** 符号なし64ビット値を`Long`のビット列のまま書く */
-  private def writeU64(w: Writer, v: Long): Writer =
+  private[z3s] def writeU64(w: Writer, v: Long): Writer =
     if v >= 0 then w.writeLong(v) else w.writeOverLong(negative = false, v)
 
-  private def readU64(r: Reader): Long =
+  private[z3s] def readU64(r: Reader): Long =
     if r.hasOverLong then r.readOverLong()
     else
       val v = r.readLong()
@@ -194,37 +193,6 @@ object Cbor:
     )
   }
 
-  given Encoder[PartDigests] = Encoder { (w, d) =>
-    w.writeMapHeader(4)
-    w.writeString("schemaVersion").writeInt(PartDigestsSchemaVersion)
-    w.writeString("partSize"); writeU64(w, d.partSize)
-    w.writeString("size"); writeU64(w, d.size)
-    w.writeString("md5").writeArrayHeader(d.md5s.size)
-    d.md5s.foreach(m => w.writeBytes(ByteVector.fromValidHex(m).toArray))
-    w
-  }
-
-  given Decoder[PartDigests] = Decoder { r =>
-    var schemaVersion: Option[Int] = scala.None
-    var partSize: Option[Long] = scala.None
-    var size: Option[Long] = scala.None
-    var md5s: Option[List[String]] = scala.None
-    readMap(r) {
-      case "schemaVersion" => r => schemaVersion = Some(r.readInt())
-      case "partSize"      => r => partSize = Some(readU64(r))
-      case "size"          => r => size = Some(readU64(r))
-      case "md5" =>
-        r =>
-          md5s = Some(readArray(r) { r =>
-            val b = r.readByteArray()
-            if b.length != 16 then fail(s"MD5 must be 16 bytes, got ${b.length}") else ByteVector(b).toHex
-          })
-    }
-    required("schemaVersion", schemaVersion) match
-      case PartDigestsSchemaVersion => PartDigests(required("partSize", partSize), required("size", size), required("md5", md5s))
-      case other                    => fail(s"unsupported part digests schema version $other")
-  }
-
   given Encoder[IndexEntry] = Encoder { (w, e) =>
     w.writeMapHeader(5)
     w.writeString("key").writeString(e.key)
@@ -281,12 +249,6 @@ object Cbor:
 
   def encodeIndex(i: Index): Array[Byte] = BorerCbor.encode(i).toByteArray
 
-  private val PartDigestsSchemaVersion = 1
-
-  def encodePartDigests(d: PartDigests): Array[Byte] = BorerCbor.encode(d).toByteArray
-
-  def decodePartDigests(bytes: Array[Byte]): Either[String, PartDigests] =
-    BorerCbor.decode(bytes).to[PartDigests].valueEither.left.map(e => s"invalid part digests: ${e.getMessage}")
 
   def decodeIndex(bytes: Array[Byte]): Either[String, Index] =
     BorerCbor.decode(bytes).to[Index].valueEither.left.map(e => s"invalid index: ${e.getMessage}")

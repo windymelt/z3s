@@ -1,6 +1,7 @@
 package dev.capslock.z3s
 
 import cats.data.NonEmptyList
+import scodec.bits.ByteVector
 
 enum SendMode:
   case Raw
@@ -85,8 +86,14 @@ final case class Header(
 ):
   def isFull: Boolean = parent.isEmpty
 
-/** バックアップのオブジェクトの各パートのMD5(16進)。多くのS3互換ストレージでは、ETagをこれらから計算して照合できる */
-final case class PartDigests(partSize: Long, size: Long, md5s: List[String])
+final case class Md5(bytes: ByteVector):
+  def hex: String = bytes.toHex
+
+object Md5:
+  def fromHex(hex: String): Md5 = Md5(ByteVector.fromValidHex(hex))
+
+/** バックアップのオブジェクトの各パートのMD5。多くのS3互換ストレージでは、ETagをこれらから計算して照合できる */
+final case class PartDigests(partSize: Long, size: Long, partMd5s: List[Md5])
 
 final case class IndexEntry(
     key: String,

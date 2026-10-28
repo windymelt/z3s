@@ -3,6 +3,7 @@ package dev.capslock.z3s
 import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
 import dev.capslock.z3s.age.X25519Identity
+import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
 import java.nio.file.{Files, Path}
 import scala.concurrent.duration.Duration
 import scala.jdk.CollectionConverters.*
@@ -65,9 +66,9 @@ class ResumeSuite extends IOSpec:
         left should === (Nil)
         received.map(_._2.toList) should === (List(e.zfs.streamFor(snapshot, None, mode == raw).toList))
         // 送り直さなかったパートのMD5も、中断前の記録から一覧に入る
-        val digests = Cbor.decodePartDigests(objects("backups/tank/data/.z3s-parts/daily-1.cbor").bytes).value
-        digests.md5s should === (objects(objectKey).bytes.grouped(5 * MiB).toList.map(p =>
-          ByteVector(java.security.MessageDigest.getInstance("MD5").digest(p)).toHex
+        val digests = PartDigestsCodec.decode(objects("backups/tank/data/.z3s-parts/daily-1.cbor").bytes).value
+        digests.partMd5s should === (objects(objectKey).bytes.grouped(5 * MiB).toList.map(p =>
+          Md5(ByteVector(java.security.MessageDigest.getInstance("MD5").digest(p)))
         ))
     }
 
