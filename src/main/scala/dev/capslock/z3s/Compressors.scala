@@ -20,7 +20,8 @@ object Compressors:
   def compress(c: Compression): Pipe[IO, Byte, Byte] = c match
     case Compression.None         => identity
     case Compression.Gzip(level)  => fs2.compression.Compression[IO].gzip(deflateLevel = Some(level))
-    case Compression.Zstd(level)  => viaOutputStream(new ZstdOutputStream(_, level))
+    // 展開時に壊れたデータを検出できるよう、展開後の内容のチェックサムをフレームに付ける
+    case Compression.Zstd(level)  => viaOutputStream(new ZstdOutputStream(_, level).setChecksum(true))
     case Compression.Xz(preset)   => viaOutputStream(new XZOutputStream(_, new LZMA2Options(preset)))
     case Compression.Bzip2(block) => viaOutputStream(new BZip2CompressorOutputStream(_, block))
 

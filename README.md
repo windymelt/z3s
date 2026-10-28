@@ -104,6 +104,7 @@ aws s3api put-bucket-lifecycle-configuration --bucket my-backups --lifecycle-con
 - Backup objects are stored at `{prefix}{dataset}@{snapshot}`, and the index at `{prefix}{dataset}/.z3s-index.cbor`.
 - An object starts with the magic `5a 33 53 42 55 50 00 00` ("Z3SBUP\0\0"), followed by the format version (u16 BE, currently 1), the header length (u32 BE, at most 65,536) and the CBOR header. The payload follows.
 - In raw mode the payload is the output of `zfs send -w`. In plain mode it is the compressed output of `zfs send`. With age encryption, z3s encrypts "SHA-256 of the header (32 bytes) + compressed stream", and checks those 32 bytes against the plaintext header on restore.
+- zstd frames carry a checksum (XXH64) of the decompressed content, which is checked on restore. Objects written without it can still be restored.
 - The header is a CBOR map with string keys. Unknown keys are ignored when decoding.
 - The user metadata `z3s-format` and `z3s-parent` are informational only.
 
