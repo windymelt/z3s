@@ -12,7 +12,8 @@ import java.time.Instant
 import java.time.format.DateTimeFormatter
 import scodec.bits.ByteVector
 import dev.capslock.z3s.age.{Age, X25519Identity, X25519Recipient}
-import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
+import dev.capslock.z3s.codec.header.HeaderCodec
+import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
 
 val IndexFileName = ".z3s-index.cbor"
 val PartDigestsDirName = ".z3s-parts"
@@ -86,7 +87,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
         Frame.codec.decode(ByteVector(bytes).bits).toEither.leftMap(_.messageWithContext).flatMap { r =>
           val frame = r.value
           if frame.version != Frame.CurrentVersion then Left(s"unsupported format version ${frame.version}")
-          else Cbor.decodeHeader(frame.header.toArray)
+          else HeaderCodec.decode(frame.header.toArray)
         }
       decoded match
         case Right(h) => IO.pure(Some(IndexEntry(o.key, h, o.size, o.etag, o.lastModified.toString)))
@@ -226,10 +227,10 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
       // 再開する場合は、中断前のヘッダ(createdAtを含む)とパートサイズを使って同じバイト列を作る
       (headerBytes, effectiveHeader, effectivePartSize) <- resume match
         case Some(r) =>
-          Cbor.decodeHeader(r.state.header.toArray).leftMap(Z3SError.Runtime(_)).liftTo[IO].map { h =>
+          HeaderCodec.decode(r.state.header.toArray).leftMap(Z3SError.Runtime(_)).liftTo[IO].map { h =>
             (r.state.header.toArray, h, r.state.partSize)
           }
-        case None => IO.pure((Cbor.encodeHeader(header), header, partSize.toInt))
+        case None => IO.pure((HeaderCodec.encode(header), header, partSize.toInt))
       _ <- IO
         .raiseError(Z3SError.Runtime(s"header is too large: ${headerBytes.length} bytes"))
         .whenA(headerBytes.length > Frame.MaxHeaderLength)
@@ -288,7 +289,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
         val mismatch: Option[String] =
           if noResume then Some("--no-resume was given")
           else
-            Cbor.decodeHeader(state.header.toArray) match
+            HeaderCodec.decode(state.header.toArray) match
               case Left(e) => Some(e)
               case Right(h) if h.guid != header.guid || h.parent != header.parent || h.mode != header.mode =>
                 Some("the snapshot or the mode differs")
@@ -434,7 +435,7 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
     val checked =
       if frame.version != Frame.CurrentVersion then Left(s"unsupported format version ${frame.version}")
       else
-        Cbor.decodeHeader(frame.header.toArray).flatMap { h =>
+        HeaderCodec.decode(frame.header.toArray).flatMap { h =>
           Either.cond(h == entry.header, h, s"header of ${entry.key} does not match the index; run `z3s reindex`")
         }
     checked match

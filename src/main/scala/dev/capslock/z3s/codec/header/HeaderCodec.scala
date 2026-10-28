@@ -1,54 +1,12 @@
-package dev.capslock.z3s
+package dev.capslock.z3s.codec.header
 
 import cats.data.NonEmptyList
-import io.bullet.borer.{Cbor as BorerCbor, Decoder, Encoder, Reader, Writer}
+import dev.capslock.z3s.{Compression, Encryption, Header, ParentRef, SendMode}
+import dev.capslock.z3s.codec.BorerSupport.{fail, readArray, readMap, readU64, required, writeU64}
+import io.bullet.borer.{Cbor, Decoder, Encoder}
 
-/** ヘッダとインデックスのCBOR表現。mapは文字列キーとし、デコード時は未知のキーを読み飛ばす */
-object Cbor:
-  private[z3s] def fail(msg: String): Nothing = throw new IllegalArgumentException(msg)
-
-  /** 符号なし64ビット値を`Long`のビット列のまま書く */
-  private[z3s] def writeU64(w: Writer, v: Long): Writer =
-    if v >= 0 then w.writeLong(v) else w.writeOverLong(negative = false, v)
-
-  private[z3s] def readU64(r: Reader): Long =
-    if r.hasOverLong then r.readOverLong()
-    else
-      val v = r.readLong()
-      if v < 0 then fail(s"expected unsigned integer, got $v") else v
-
-  /** mapの各要素を読み、`known`が扱わなかったキーの値を読み飛ばす */
-  private[z3s] def readMap(r: Reader)(known: PartialFunction[String, Reader => Unit]): Unit =
-    def field(): Unit =
-      val key = r.readString()
-      known.lift(key) match
-        case Some(read) => read(r)
-        case None       => r.skipElement()
-    if r.hasMapHeader then
-      val n = r.readMapHeader()
-      var i = 0L
-      while i < n do
-        field()
-        i += 1
-    else
-      r.readMapStart()
-      while !r.tryReadBreak() do field()
-
-  private[z3s] def readArray[A](r: Reader)(elem: Reader => A): List[A] =
-    val b = List.newBuilder[A]
-    if r.hasArrayHeader then
-      val n = r.readArrayHeader()
-      var i = 0L
-      while i < n do
-        b += elem(r)
-        i += 1
-    else
-      r.readArrayStart()
-      while !r.tryReadBreak() do b += elem(r)
-    b.result()
-
-  private[z3s] def required[A](name: String, v: Option[A]): A = v.getOrElse(fail(s"missing key: $name"))
-
+/** バックアップのオブジェクトのヘッダのCBOR表現。mapは文字列キーとし、デコード時は未知のキーを読み飛ばす */
+object HeaderCodec:
   given Encoder[Compression] = Encoder { (w, c) =>
     val (alg, param) = c match
       case Compression.None         => ("none", scala.None)
@@ -193,61 +151,7 @@ object Cbor:
     )
   }
 
-  given Encoder[IndexEntry] = Encoder { (w, e) =>
-    w.writeMapHeader(5)
-    w.writeString("key").writeString(e.key)
-    w.writeString("header").write(e.header)
-    w.writeString("size"); writeU64(w, e.size)
-    w.writeString("etag").writeString(e.etag)
-    w.writeString("uploadedAt").writeString(e.uploadedAt)
-  }
+  def encode(h: Header): Array[Byte] = Cbor.encode(h).toByteArray
 
-  given Decoder[IndexEntry] = Decoder { r =>
-    var key: Option[String] = scala.None
-    var header: Option[Header] = scala.None
-    var size: Option[Long] = scala.None
-    var etag: Option[String] = scala.None
-    var uploadedAt: Option[String] = scala.None
-    readMap(r) {
-      case "key"        => r => key = Some(r.readString())
-      case "header"     => r => header = Some(r.read[Header]())
-      case "size"       => r => size = Some(readU64(r))
-      case "etag"       => r => etag = Some(r.readString())
-      case "uploadedAt" => r => uploadedAt = Some(r.readString())
-    }
-    IndexEntry(
-      required("key", key),
-      required("header", header),
-      required("size", size),
-      required("etag", etag),
-      required("uploadedAt", uploadedAt)
-    )
-  }
-
-  given Encoder[Index] = Encoder { (w, i) =>
-    w.writeMapHeader(2)
-    w.writeString("schemaVersion").writeInt(i.schemaVersion)
-    w.writeString("entries").writeArrayHeader(i.entries.size)
-    i.entries.foreach(e => w.write(e))
-    w
-  }
-
-  given Decoder[Index] = Decoder { r =>
-    var schemaVersion: Option[Int] = scala.None
-    var entries: List[IndexEntry] = Nil
-    readMap(r) {
-      case "schemaVersion" => r => schemaVersion = Some(r.readInt())
-      case "entries"       => r => entries = readArray(r)(_.read[IndexEntry]())
-    }
-    Index(required("schemaVersion", schemaVersion), entries)
-  }
-
-  def encodeHeader(h: Header): Array[Byte] = BorerCbor.encode(h).toByteArray
-
-  def decodeHeader(bytes: Array[Byte]): Either[String, Header] =
-    BorerCbor.decode(bytes).to[Header].valueEither.left.map(e => s"invalid header: ${e.getMessage}")
-
-  def encodeIndex(i: Index): Array[Byte] = BorerCbor.encode(i).toByteArray
-
-  def decodeIndex(bytes: Array[Byte]): Either[String, Index] =
-    BorerCbor.decode(bytes).to[Index].valueEither.left.map(e => s"invalid index: ${e.getMessage}")
+  def decode(bytes: Array[Byte]): Either[String, Header] =
+    Cbor.decode(bytes).to[Header].valueEither.left.map(e => s"invalid header: ${e.getMessage}")

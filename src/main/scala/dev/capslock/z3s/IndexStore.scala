@@ -2,6 +2,7 @@ package dev.capslock.z3s
 
 import cats.effect.IO
 import cats.syntax.all.*
+import dev.capslock.z3s.codec.index.IndexCodec
 
 final class IndexStore(store: ObjectStore, val key: String):
   private val MaxAttempts = 5
@@ -10,7 +11,7 @@ final class IndexStore(store: ObjectStore, val key: String):
     store.getWithEtag(key).flatMap {
       case None => IO.pure(None)
       case Some((bytes, etag)) =>
-        Cbor.decodeIndex(bytes).leftMap(Z3SError.Runtime(_)).liftTo[IO].map(i => Some((i, etag)))
+        IndexCodec.decode(bytes).leftMap(Z3SError.Runtime(_)).liftTo[IO].map(i => Some((i, etag)))
     }
 
   /** 現在のインデックスを読まずに置き換える。`build`の実行前に取得したETagを条件に書き込み、
@@ -20,7 +21,7 @@ final class IndexStore(store: ObjectStore, val key: String):
     def attempt(n: Int): IO[Index] =
       store.head(key).map(_.map(_.etag)).flatMap { before =>
         build.flatMap { next =>
-          val bytes = Cbor.encodeIndex(next)
+          val bytes = IndexCodec.encode(next)
           before.fold(store.putIfAbsent(key, bytes))(store.putIfMatch(key, bytes, _)).flatMap {
             case PutResult.Written(_) => IO.pure(next)
             case PutResult.PreconditionFailed if n < MaxAttempts =>
@@ -38,7 +39,7 @@ final class IndexStore(store: ObjectStore, val key: String):
     def attempt(n: Int): IO[Index] =
       load.flatMap { current =>
         val next = f(current.fold(Index.empty)(_._1))
-        val bytes = Cbor.encodeIndex(next)
+        val bytes = IndexCodec.encode(next)
         val put = current match
           case None            => store.putIfAbsent(key, bytes)
           case Some((_, etag)) => store.putIfMatch(key, bytes, etag)

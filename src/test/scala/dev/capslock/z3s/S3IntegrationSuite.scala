@@ -1,7 +1,7 @@
 package dev.capslock.z3s
 
 import cats.effect.{IO, Ref, Resource}
-import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
+import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
 import fs2.{Chunk, Stream}
 import java.net.URI
 import java.nio.file.Files

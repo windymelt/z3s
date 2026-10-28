@@ -2,7 +2,8 @@ package dev.capslock.z3s
 
 import cats.data.NonEmptyList
 import cats.effect.IO
-import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
+import dev.capslock.z3s.codec.header.HeaderCodec
+import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
 import fs2.{Chunk, Stream}
 import io.bullet.borer.{Cbor as BorerCbor, Dom}
 import org.scalatest.Assertion
@@ -32,25 +33,25 @@ class FrameSuite extends IOSpec:
     val headers =
       for mode <- modes; parent <- List(None, header.parent); partSize <- List(None, Some(5L * 1024 * 1024))
       yield header.copy(mode = mode, parent = parent, partSize = partSize)
-    forAll(headers)(h => Cbor.decodeHeader(Cbor.encodeHeader(h)) should === (Right(h))): Assertion
+    forAll(headers)(h => HeaderCodec.decode(HeaderCodec.encode(h)) should === (Right(h))): Assertion
   }
 
   test("guid is encoded as CBOR uint64") {
-    val bytes = ByteVector(Cbor.encodeHeader(header.copy(parent = None)))
+    val bytes = ByteVector(HeaderCodec.encode(header.copy(parent = None)))
     // "guid"の直後がmajor type 0, 8バイト長(0x1b)の2^64 - 1234567890123
     val guid = hex"1b" ++ ByteVector.fromLong(-1234567890123L)
     bytes.toHex should include((ByteVector("guid".getBytes) ++ guid).toHex)
   }
 
   test("unknown keys are ignored") {
-    val known = Cbor.encodeHeader(header)
+    val known = HeaderCodec.encode(header)
     // 既知のmapに、入れ子のmapと配列を値に持つ未知のキーを加える
     val extra = BorerCbor
       .encode(Map[String, Map[String, List[Int]]]("future" -> Map("nested" -> List(1, 2, 3)), "note" -> Map.empty))
       .toByteArray
     val count = known(0) & 0x1f
     val merged = Array((0xa0 | (count + 2)).toByte) ++ known.drop(1) ++ extra.drop(1)
-    Cbor.decodeHeader(merged) should === (Right(header))
+    HeaderCodec.decode(merged) should === (Right(header))
   }
 
   test("part digests round trip, and an MD5 of the wrong length is rejected") {
@@ -70,7 +71,7 @@ class FrameSuite extends IOSpec:
   }
 
   test("frame round trip") {
-    val frame = Frame(1, ByteVector(Cbor.encodeHeader(header)))
+    val frame = Frame(1, ByteVector(HeaderCodec.encode(header)))
     val bytes = Frame.encode(frame)
     bytes.take(8) should === (Frame.Magic)
     bytes.slice(8, 10) should === (hex"0001")
@@ -79,7 +80,7 @@ class FrameSuite extends IOSpec:
   }
 
   test("split returns the frame and the rest of the stream") {
-    val frame = Frame(1, ByteVector(Cbor.encodeHeader(header)))
+    val frame = Frame(1, ByteVector(HeaderCodec.encode(header)))
     val payload = Array.tabulate[Byte](300000)(i => (i * 7).toByte)
     val in = (Stream.chunk(Chunk.byteVector(Frame.encode(frame))) ++ Stream.chunk(Chunk.array(payload)))
       .covary[IO]
