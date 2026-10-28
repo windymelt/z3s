@@ -7,6 +7,7 @@ import dev.capslock.z3s.ops.{OpsContext, Tree}
 import dev.capslock.z3s.ops.reindex.Reindex
 import io.bullet.borer.{Json, Writer}
 
+/** statusサブコマンドを処理する。S3にあるバックアップを一覧にし、各バックアップの健全性と、同じスナップショットがローカルにあるかを表示する */
 private[ops] final class Status(ctx: OpsContext):
   import ctx.{common, zfs}
 
@@ -24,7 +25,7 @@ private[ops] final class Status(ctx: OpsContext):
   private def statusRows(refresh: Boolean): IO[List[StatusRow]] =
     val reindex = Reindex(ctx)
     for
-      index <- if refresh then reindex.reindex else reindex.loadIndex
+      index <- if refresh then reindex.reindex else reindex.loadOrCreateIndex
       exists <- zfs.datasetExists(common.dataset)
       locals <- if exists then zfs.listSnapshots(common.dataset) else IO.pure(Nil)
       health = Planner.health(index)

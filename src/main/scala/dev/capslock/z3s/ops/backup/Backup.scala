@@ -24,17 +24,18 @@ final case class BackupOptions(
     recursive: Boolean = false
 ):
   /** age暗号化はfile keyを保存しないと再開できないため、再開の対象にしない */
-  def resumable: Boolean = stateDir.isDefined && (mode match
+  def isResumable: Boolean = stateDir.isDefined && (mode match
     case SendMode.Raw                         => true
     case SendMode.Plain(_, Encryption.None) => true
     case SendMode.Plain(_, Encryption.Age(_)) => false)
 
+/** backupサブコマンドを処理する。スナップショットをzfs sendで送ってS3にアップロードし、インデックスに加える */
 private[ops] final class Backup(ctx: OpsContext):
   import ctx.{common, err, now, out, progress, store, zfs}
 
   def backup(opts: BackupOptions): IO[Unit] =
     val resumeNotice = opts.stateDir match
-      case Some(dir) if opts.resumable => out(s"resume state directory: $dir")
+      case Some(dir) if opts.isResumable => out(s"resume state directory: $dir")
       case Some(dir) if opts.recursive =>
         out(s"resume state directory: $dir (not used for age-encrypted backups)")
       case Some(_) => out("resume: not available for age-encrypted backups")
@@ -48,10 +49,10 @@ private[ops] final class Backup(ctx: OpsContext):
       datasets <- zfs.listDatasets(common.dataset)
       rootLocals <- zfs.listSnapshots(common.dataset)
       // zfs snapshot -rで作った同じ時点のスナップショットを揃えるため、送る名前はrootで決める
-      target <- Planner.selectTarget(rootLocals, common.snapshotPrefix, opts.snapshot).liftTo[IO]
-      _ <- out(s"recursive backup of ${datasets.size} dataset(s) at @${target.shortName}")
+      rootSnapshot <- Planner.selectTarget(rootLocals, common.snapshotPrefix, opts.snapshot).liftTo[IO]
+      _ <- out(s"recursive backup of ${datasets.size} dataset(s) at @${rootSnapshot.shortName}")
       results <- datasets.zipWithIndex.traverse { (ds, i) =>
-        backupTreeMember(ds, s"[${i + 1}/${datasets.size}]", target.shortName, opts)
+        backupTreeMember(ds, s"[${i + 1}/${datasets.size}]", rootSnapshot.shortName, opts)
       }
       _ <- Tree.raiseFailures(results.flatten, Nil, datasets.size)
     yield ()
@@ -68,10 +69,13 @@ private[ops] final class Backup(ctx: OpsContext):
     val note = if ds.nativeEncrypted && opts.mode != SendMode.Raw then " (encrypted; sending raw)" else ""
     val child = Backup(ctx.forDataset(ds.name))
     val childOpts = opts.copy(snapshot = Some(snapshot), mode = mode, recursive = false)
-    val run = zfs.listSnapshots(ds.name).flatMap { locals =>
-      if !locals.exists(_.shortName == snapshot) then err(s"warning: ${ds.name} has no snapshot @$snapshot; skipping")
-      else child.backupDataset(childOpts, autoFull = true)
-    }
+    val run =
+      for
+        locals <- zfs.listSnapshots(ds.name)
+        _ <-
+          if locals.exists(_.shortName == snapshot) then child.backupDataset(childOpts, autoFull = true)
+          else err(s"warning: ${ds.name} has no snapshot @$snapshot; skipping")
+      yield ()
 
     out(s"== $position ${ds.name}$note") *> run.attempt.flatMap {
       case Right(()) => IO.pure(None)
@@ -83,7 +87,7 @@ private[ops] final class Backup(ctx: OpsContext):
     for
       locals <- zfs.listSnapshots(common.dataset)
       target <- Planner.selectTarget(locals, common.snapshotPrefix, opts.snapshot).liftTo[IO]
-      index <- Reindex(ctx).loadIndex
+      index <- Reindex(ctx).loadOrCreateIndex
       full = opts.full || (autoFull && index.entries.isEmpty)
       _ <- out(s"no backups of ${common.dataset} on S3; sending a full stream").whenA(full && !opts.full)
       plan <- Planner
@@ -134,7 +138,7 @@ private[ops] final class Backup(ctx: OpsContext):
       opts: BackupOptions,
       label: String
   ): IO[Unit] =
-    val states = opts.stateDir.filter(_ => opts.resumable).map(StateStore(_, progress.log))
+    val states = opts.stateDir.filter(_ => opts.isResumable).map(StateStore(_, progress.log))
     val metadata = Map("z3s-format" -> Frame.CurrentVersion.toString) ++ parentName.map("z3s-parent" -> _)
     val raw = opts.mode == SendMode.Raw
     for

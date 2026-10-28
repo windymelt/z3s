@@ -18,6 +18,7 @@ final case class RestoreOptions(
     recursive: Boolean = false
 )
 
+/** restoreサブコマンドを処理する。S3のバックアップを古いものから順にzfs recvで受信し、指定したスナップショットを復元する */
 private[ops] final class Restore(ctx: OpsContext):
   import ctx.{common, err, out, store, zfs}
 
@@ -27,7 +28,7 @@ private[ops] final class Restore(ctx: OpsContext):
   private def restoreDataset(opts: RestoreOptions): IO[Unit] =
     val target = opts.target.getOrElse(common.dataset)
     for
-      index <- Reindex(ctx).loadIndex
+      index <- Reindex(ctx).loadOrCreateIndex
       remaining <- planRestore(index, target, opts.snapshot)
       _ <- requireIdentity(opts, remaining)
       _ <- receiveAll(remaining, target, opts)
@@ -56,7 +57,7 @@ private[ops] final class Restore(ctx: OpsContext):
   /** このdatasetの計画を立てる。snapshotのバックアップがなければNone、計画を立てられなければLeftにする */
   private def planTreeMember(target: String, snapshot: String): IO[TreeMemberPlan] =
     val ds = common.dataset
-    Reindex(ctx).loadIndex
+    Reindex(ctx).loadOrCreateIndex
       .flatMap { index =>
         if !index.entries.exists(_.header.snapshot == s"$ds@$snapshot") then IO.pure(None)
         else planRestore(index, target, snapshot).map(Some(_))
@@ -134,11 +135,11 @@ private[ops] final class Restore(ctx: OpsContext):
       payload: Stream[IO, Byte]
   ): Stream[IO, Byte] =
     val checked =
-      if frame.version != Frame.CurrentVersion then Left(s"unsupported format version ${frame.version}")
-      else
+      if frame.version == Frame.CurrentVersion then
         HeaderCodec.decode(frame.header.toArray).flatMap { h =>
           Either.cond(h == entry.header, h, s"header of ${entry.key} does not match the index; run `z3s reindex`")
         }
+      else Left(s"unsupported format version ${frame.version}")
     checked match
       case Left(e) => Stream.raiseError[IO](Z3SError.Runtime(e))
       case Right(h) =>

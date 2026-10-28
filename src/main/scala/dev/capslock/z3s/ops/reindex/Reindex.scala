@@ -12,9 +12,10 @@ private[ops] final class Reindex(ctx: OpsContext):
   import ctx.{common, err, out, store}
 
   def reindex: IO[Index] =
-    val scan = store
+    val scan: IO[Index] = store
       .list(common.objectPrefix)
       .parEvalMap(common.concurrency)(readEntry)
+      // 読めなかったオブジェクトはreadEntryがNoneにするので、ここで除く
       .unNone
       .compile
       .toList
@@ -24,7 +25,7 @@ private[ops] final class Reindex(ctx: OpsContext):
     else ctx.indexStore.replace(scan)
 
   /** インデックスを読む。なければ作り直す */
-  def loadIndex: IO[Index] =
+  def loadOrCreateIndex: IO[Index] =
     ctx.indexStore.load.flatMap {
       case Some((index, _)) => IO.pure(index)
       case None             => err(s"index ${common.indexKey} not found; running reindex") *> reindex
@@ -32,13 +33,16 @@ private[ops] final class Reindex(ctx: OpsContext):
 
   private def readEntry(o: ObjectInfo): IO[Option[IndexEntry]] =
     store.getPrefix(o.key, Frame.MaxFrameLength).flatMap { bytes =>
-      val decoded =
-        Frame.codec.decode(ByteVector(bytes).bits).toEither.leftMap(_.messageWithContext).flatMap { r =>
-          val frame = r.value
-          if frame.version != Frame.CurrentVersion then Left(s"unsupported format version ${frame.version}")
-          else HeaderCodec.decode(frame.header.toArray)
-        }
-      decoded match
+      val frame: Either[String, Frame] = Frame.codec
+        .decode(ByteVector(bytes).bits)
+        .toEither
+        .leftMap(_.messageWithContext)
+        .map(_.value)
+      val header = frame.flatMap { f =>
+        if f.version == Frame.CurrentVersion then HeaderCodec.decode(f.header.toArray)
+        else Left(s"unsupported format version ${f.version}")
+      }
+      header match
         case Right(h) => IO.pure(Some(IndexEntry(o.key, h, o.size, o.etag, o.lastModified.toString)))
         case Left(e)  => err(s"warning: skipping ${o.key}: $e").as(None)
     }
