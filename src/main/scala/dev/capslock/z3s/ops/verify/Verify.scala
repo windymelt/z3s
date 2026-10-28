@@ -1,16 +1,13 @@
 package dev.capslock.z3s.ops.verify
 
 import cats.effect.IO
-import cats.effect.std.Random
-import cats.effect.syntax.all.*
 import cats.syntax.all.*
 import dev.capslock.z3s.*
 import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
 import dev.capslock.z3s.ops.{OpsContext, Tree}
 import dev.capslock.z3s.ops.reindex.Reindex
 
-/** @param sample Someなら、各オブジェクトからこの数のパートを無作為に選んで読む。Noneなら全体を読む */
-final case class VerifyOptions(snapshot: Option[String], sample: Option[Int], recursive: Boolean = false)
+final case class VerifyOptions(snapshot: Option[String], recursive: Boolean = false)
 
 /** 1つのオブジェクトを検証した結果 */
 enum Verdict:
@@ -23,7 +20,7 @@ enum Verdict:
   case Missing
 
   /** 検証に失敗したことを表す短い説明。検証できた、または検証できなかった場合はNoneを返す */
-  def problem: Option[String] = this match
+  def failureDescription: Option[String] = this match
     case Corrupt(parts)          => Some(s"corrupt part(s) ${parts.mkString(", ")}")
     case _: Mismatch             => Some("ETag mismatch")
     case Missing                 => Some("missing")
@@ -64,9 +61,9 @@ private[ops] final class Verify(ctx: OpsContext):
         case (None, Nil)              => out(s"no backups of ${common.dataset} on S3")
         case _                        => IO.unit
       verdicts <- entries.zipWithIndex.traverse { (e, i) =>
-        verifyEntry(e, opts.sample, s"[${i + 1}/${entries.size}]").flatTap(report(e, _)).tupleLeft(e)
+        verifyEntry(e, s"[${i + 1}/${entries.size}]").flatTap(report(e, _)).tupleLeft(e)
       }
-      problems = verdicts.flatMap((e, v) => v.problem.map(p => s"${e.key} ($p)"))
+      problems = verdicts.flatMap((e, v) => v.failureDescription.map(p => s"${e.key} ($p)"))
       _ <- IO
         .raiseError(
           Z3SError.Runtime(s"${problems.size} of ${entries.size} object(s) failed verification: ${problems.mkString(", ")}")
@@ -74,7 +71,7 @@ private[ops] final class Verify(ctx: OpsContext):
         .whenA(problems.nonEmpty)
     yield ()
 
-  private def verifyEntry(entry: IndexEntry, sample: Option[Int], position: String): IO[Verdict] =
+  private def verifyEntry(entry: IndexEntry, position: String): IO[Verdict] =
     store.head(entry.key).flatMap {
       case None => IO.pure(Verdict.Missing)
       case Some(info) =>
@@ -91,10 +88,7 @@ private[ops] final class Verify(ctx: OpsContext):
               val trusted = digests.filter(d => d.size == info.size && MultipartEtag.of(d.partMd5s) == etag)
               if MultipartEtag.partCount(info.size, partSize) != etag.parts then
                 IO.pure(Verdict.Unverifiable(s"$partSize-byte parts do not add up to the ${etag.parts} parts in the ETag"))
-              else
-                sample match
-                  case Some(n) => verifySample(entry, info, partSize, n, digests, trusted)
-                  case None    => verifyFull(entry, info, partSize, etag, digests, trusted, position)
+              else verifyFull(entry, info, partSize, etag, digests, trusted, position)
             }
     }
 
@@ -127,37 +121,6 @@ private[ops] final class Verify(ctx: OpsContext):
               )
             case None => Verdict.Mismatch(computed, etag)
       }
-
-  /** 無作為に選んだパートだけをranged GETで読み、記録したMD5と比べる */
-  private def verifySample(
-      entry: IndexEntry,
-      info: ObjectInfo,
-      partSize: Long,
-      count: Int,
-      digests: Option[PartDigests],
-      trusted: Option[PartDigests]
-  ): IO[Verdict] =
-    (digests, trusted) match
-      case (None, _) =>
-        IO.pure(Verdict.Unverifiable("the part MD5 list was not found; run without --sample to read the whole object"))
-      case (Some(_), None) =>
-        IO.pure(Verdict.Unverifiable("the part MD5 list does not match the ETag; run without --sample"))
-      case (_, Some(d)) =>
-        for
-          random <- Random.scalaUtilRandom[IO]
-          picked <- random.shuffleList(d.partMd5s.indices.toList).map(_.take(count).sorted)
-          bad <- picked.parTraverseN(common.concurrency) { i =>
-            val offset = i * partSize
-            store
-              .getRange(entry.key, offset, math.min(partSize, info.size - offset))
-              .through(MultipartEtag.partMd5s(partSize))
-              .compile
-              .toList
-              .map(actual => Option.when(actual != List(d.partMd5s(i)))(i + 1))
-          }
-        yield bad.flatten match
-          case Nil   => Verdict.Ok(s"${picked.size} of ${d.partMd5s.size} part(s) sampled")
-          case parts => Verdict.Corrupt(parts)
 
   /** 番号は1から数える。パートの数が違う場合、片方にしかないパートも一致しないものとする */
   private def differingParts(expected: List[Md5], actual: List[Md5]): List[Int] =

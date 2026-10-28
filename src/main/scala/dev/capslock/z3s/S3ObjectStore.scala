@@ -53,12 +53,8 @@ final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectS
       // 空のオブジェクトにbytes=0-のrangeを指定すると416になる
       .recover { case e if status(e).contains(416) => Array.emptyByteArray }
 
-  def get(key: String): Stream[IO, Byte] = stream(GetObjectRequest.builder().bucket(bucket).key(key).build())
-
-  def getRange(key: String, offset: Long, length: Long): Stream[IO, Byte] =
-    stream(GetObjectRequest.builder().bucket(bucket).key(key).range(s"bytes=$offset-${offset + length - 1}").build())
-
-  private def stream(req: GetObjectRequest): Stream[IO, Byte] =
+  def get(key: String): Stream[IO, Byte] =
+    val req = GetObjectRequest.builder().bucket(bucket).key(key).build()
     Stream
       .eval(call(client.getObject(req, AsyncResponseTransformer.toPublisher[GetObjectResponse]())))
       .flatMap { publisher =>

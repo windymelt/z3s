@@ -26,7 +26,12 @@ object MultipartEtag:
   /** sizeバイトのオブジェクトをpartSizeごとに区切ったときのパートの数 */
   def partCount(size: Long, partSize: Long): Long = (size + partSize - 1) / partSize
 
-  /** 入力をpartSizeバイトずつに区切り、各パートのMD5を順に返す。パートを丸ごとメモリに置かない */
+  /** 入力をpartSizeバイトずつに区切り、各パートのMD5を順に返す。パートを丸ごとメモリに置かない
+    *
+    * 使うメモリは、MessageDigestの状態(数百バイト)と、上流から受け取った処理中のチャンク1つ分で、partSizeには依存しない。
+    * 結果をListで受け取る場合は、別に1パートあたり200バイト程度(16バイトのMD5と、ByteVectorやListのオブジェクト)がかかる。
+    * パートは最大10,000個なので、2MB程度になる
+    */
   def partMd5s(partSize: Long): Pipe[IO, Byte, Md5] = in =>
     def digest(md: MessageDigest): Pull[IO, Md5, Unit] = Pull.eval(IO(Md5(ByteVector(md.digest())))).flatMap(Pull.output1)
 

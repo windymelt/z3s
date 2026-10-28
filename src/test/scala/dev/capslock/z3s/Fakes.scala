@@ -98,9 +98,6 @@ final class InMemoryStore extends ObjectStore:
   def get(key: String): Stream[IO, Byte] =
     Stream.eval(objects.get.map(_(key).bytes)).flatMap(b => Stream.chunk(Chunk.array(b))).rechunkRandomly()
 
-  def getRange(key: String, offset: Long, length: Long): Stream[IO, Byte] =
-    get(key).drop(offset).take(length)
-
   def getWithEtag(key: String): IO[Option[(Array[Byte], String)]] =
     objects.get.map(_.get(key).map(o => (o.bytes, o.etag)))
 

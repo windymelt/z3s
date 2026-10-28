@@ -20,8 +20,6 @@ trait ObjectStore:
   /** `[0, length)`を取得する。オブジェクトが短い場合は全体を返す */
   def getPrefix(key: String, length: Int): IO[Array[Byte]]
   def get(key: String): Stream[IO, Byte]
-  /** `[offset, offset + length)`を取得する */
-  def getRange(key: String, offset: Long, length: Long): Stream[IO, Byte]
   /** 内容とETagを返す。存在しなければNone */
   def getWithEtag(key: String): IO[Option[(Array[Byte], String)]]
   /** 同名のオブジェクトがあれば上書きする */

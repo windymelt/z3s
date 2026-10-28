@@ -55,7 +55,7 @@ z3s restore daily-2026-10-23 --bucket my-backups --dataset tank/data --target ta
 
 z3s status --bucket my-backups --dataset tank/data [--refresh] [--json]
 z3s reindex --bucket my-backups --dataset tank/data
-z3s verify --bucket my-backups --dataset tank/data [--snapshot NAME] [--sample N]
+z3s verify --bucket my-backups --dataset tank/data [--snapshot NAME]
 ```
 
 - `backup` で `--snapshot` を省略すると、`--snapshot-prefix` に一致する最新のローカルスナップショットを送ります。incremental では、ローカルのスナップショットを createtxg の順に遡り、S3 上に同じ guid で存在する最新のものを起点にして、そこから対象までの各ペアを個別のオブジェクトとして送ります。
@@ -74,7 +74,6 @@ z3s verify --bucket my-backups --dataset tank/data [--snapshot NAME] [--sample N
 `verify` は、インデックスにあるバックアップのオブジェクトを読み、S3 の ETag と照合します。オブジェクトはストリームで読み、ディスクには書きません。`--snapshot` を省略すると dataset のすべてのバックアップを検証し、`--recursive` (`-r`) を付けると子孫の dataset も検証します。
 
 - 既定では、各オブジェクトを最後まで読んで各パートの MD5 を計算し、MD5(各パートの MD5 を連結したもの)-(パートの数) を ETag と比べます。すべてのバイトをダウンロードするので、転送量と時間はバックアップの大きさに比例します。パートの MD5 一覧 ([S3 オブジェクトの形式](#s3-オブジェクトの形式) を参照) が ETag と一致する場合は、壊れたパートの番号を表示します。
-- `--sample N` を付けると、各オブジェクトから無作為に選んだ N 個のパートだけを ranged GET で読み、パートの MD5 一覧と比べます。ETag と一致する一覧が必要なので、z3s が一覧を保存するようになる前にバックアップしたオブジェクトはこの方法では検証できません。それらは `--sample` を付けずに検証してください。
 - ETag が `<MD5>-<パートの数>` の形でないオブジェクトと、内容がパートの MD5 一覧と一致するのに ETag とは一致しないオブジェクトは、検証できないと表示し、失敗には数えません。Amazon S3 では、SSE-KMS や SSE-C で暗号化したオブジェクトの ETag がこれにあたります。
 - パートの MD5 一覧がない場合に、計算した ETag が S3 の ETag と異なると、mismatch と表示します。オブジェクトが壊れているか、ストレージが MD5 から ETag を計算していないかのどちらかです。
 - 壊れたオブジェクト、mismatch のオブジェクト、インデックスにあるのに S3 にないオブジェクトがあれば、最後にそれらを一覧にして 1 で終了します。

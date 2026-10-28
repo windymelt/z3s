@@ -118,12 +118,8 @@ object Cli:
   val verify: Opts[Cmd] =
     (
       Opts.option[String]("snapshot", "Snapshot to verify (the part after @). Defaults to every backup.").orNone,
-      Opts
-        .option[Int]("sample", "Read only this many random parts of each object. Needs the part MD5 list.")
-        .validate("--sample must be at least 1")(_ >= 1)
-        .orNone,
       recursiveFlag
-    ).mapN((snapshot, sample, recursive) => Cmd.Verify(VerifyOptions(snapshot, sample, recursive)))
+    ).mapN((snapshot, recursive) => Cmd.Verify(VerifyOptions(snapshot, recursive)))
 
   private def sub(name: String, help: String, opts: Opts[Cmd]): Opts[(Common, Connection, Cmd)] =
     Opts.subcommand(name, help)((common, connection, opts).tupled)

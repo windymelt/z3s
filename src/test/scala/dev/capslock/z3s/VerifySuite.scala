@@ -71,8 +71,8 @@ class VerifySuite extends IOSpec:
       _ <- ops.backup(BackupOptions(full = true, Some("daily-1"), SendMode.Raw, None))
     yield Env(store, ops)
 
-  def verify(e: Env, snapshot: Option[String] = None, sample: Option[Int] = None): IO[Either[Throwable, Unit]] =
-    e.ops.verify(VerifyOptions(snapshot, sample)).attempt
+  def verify(e: Env, snapshot: Option[String] = None): IO[Either[Throwable, Unit]] =
+    e.ops.verify(VerifyOptions(snapshot)).attempt
 
   def update(e: Env, k: String)(f: StoredObject => StoredObject): IO[Unit] =
     e.store.objects.update(m => m.updated(k, f(m(k))))
@@ -83,44 +83,34 @@ class VerifySuite extends IOSpec:
 
   def failure(r: Either[Throwable, Unit]): String = r.left.value.getMessage
 
-  test("an intact object passes both the full and the sampled verification") {
+  test("an intact object passes the verification") {
     for
       e <- env
       etag <- e.store.head(objectKey).map(_.value.etag)
-      full <- verify(e)
-      sampled <- verify(e, sample = Some(2))
+      r <- verify(e)
     yield
       MultipartEtag.parse(etag).map(_.parts) should === (Some(3))
-      full should === (Right(()))
-      sampled should === (Right(()))
+      r should === (Right(()))
   }
 
-  test("a damaged part is located by the full and the sampled verification") {
+  test("a damaged part is located with the part MD5 list") {
     for
       e <- env
       _ <- corruptPart2(e)
-      full <- verify(e)
-      sampled <- verify(e, sample = Some(3))
-    yield
-      failure(full) should include(s"$objectKey (corrupt part(s) 2)")
-      failure(sampled) should include(s"$objectKey (corrupt part(s) 2)")
+      r <- verify(e)
+    yield failure(r) should include(s"$objectKey (corrupt part(s) 2)")
   }
 
-  test("without the part MD5 list, the full verification still detects damage but cannot locate it") {
+  test("without the part MD5 list, damage is still detected but not located") {
     for
       e <- env
       _ <- e.store.objects.update(_ - partsKey)
       intact <- verify(e)
-      sampled <- verify(e, sample = Some(3))
       _ <- corruptPart2(e)
       damaged <- verify(e)
-      damagedSampled <- verify(e, sample = Some(3))
     yield
       intact should === (Right(()))
-      sampled should === (Right(()))
       failure(damaged) should include(s"$objectKey (ETag mismatch)")
-      // 抜き取りでは一覧がないと検証できないので、失敗にはしない
-      damagedSampled should === (Right(()))
   }
 
   test("an ETag that is not computed from the part MD5s is not reported as damage") {
