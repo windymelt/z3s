@@ -30,7 +30,7 @@ Common options go after the subcommand. Command-line arguments take precedence o
 | `--dataset` | `Z3S_DATASET` | Target dataset. Required |
 | `--snapshot-prefix` | `Z3S_SNAPSHOT_PREFIX` | Only consider snapshots whose name (the part after `@`) starts with this |
 | `--region` | `AWS_REGION` | Region |
-| `--endpoint` | `Z3S_ENDPOINT` | Endpoint of S3-compatible storage. When set, z3s uses path-style access and sends checksums only when required |
+| `--endpoint` | `Z3S_ENDPOINT` | Endpoint of S3-compatible storage. When set, z3s uses path-style access and sends checksums only when required. Content-MD5 is sent with every part in either case |
 | `--concurrency` | | Number of parallel S3 requests. Defaults to 4 |
 | `--progress` | `Z3S_PROGRESS` | `auto`, `bar`, `log` or `none`. Defaults to `auto` |
 | `--dry-run` | | Print the commands and the plan without writing to S3 or running `zfs recv` |

@@ -30,7 +30,7 @@ Java 24 以降では Scala ランタイムが `sun.misc.Unsafe` を使うこと�
 | `--dataset` | `Z3S_DATASET` | 対象の dataset。必須 |
 | `--snapshot-prefix` | `Z3S_SNAPSHOT_PREFIX` | 対象とするスナップショット名 (`@` の後ろ) の prefix |
 | `--region` | `AWS_REGION` | リージョン |
-| `--endpoint` | `Z3S_ENDPOINT` | S3 互換ストレージの endpoint。指定すると path-style でアクセスし、チェックサムの付与を必要時のみに切り替えます |
+| `--endpoint` | `Z3S_ENDPOINT` | S3 互換ストレージの endpoint。指定すると path-style でアクセスし、チェックサムの付与を必要時のみに切り替えます。各パートの Content-MD5 は指定の有無にかかわらず付けます |
 | `--concurrency` | | S3 への並列リクエスト数。既定は 4 |
 | `--progress` | `Z3S_PROGRESS` | `auto`、`bar`、`log`、`none` のいずれか。既定は `auto` |
 | `--dry-run` | | 実行するコマンドと計画を表示し、S3 への書き込みと `zfs recv` を行いません |

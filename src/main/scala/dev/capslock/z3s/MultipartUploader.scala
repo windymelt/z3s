@@ -81,9 +81,9 @@ final class MultipartUploader(
             s"run the same backup again to resume (state: ${st.path(bucket, key)})"
         )
 
-    def uploadWithRetry(s: UploadState, number: Int, bytes: Array[Byte]): IO[String] =
+    def uploadWithRetry(s: UploadState, number: Int, bytes: Array[Byte], md5: String): IO[String] =
       def attempt(n: Int): IO[String] =
-        store.uploadPart(key, s.uploadId, number, bytes).handleErrorWith { e =>
+        store.uploadPart(key, s.uploadId, number, bytes, md5).handleErrorWith { e =>
           if n >= UploadPartRetries then IO.raiseError(e)
           else
             val delay = retryBase * (1L << n)
@@ -112,7 +112,7 @@ final class MultipartUploader(
             )
 
         send = (number: Int, bytes: Array[Byte], md5: String) =>
-          (counters.started *> uploadWithRetry(s0, number, bytes).guarantee(counters.stopped)).flatMap { etag =>
+          (counters.started *> uploadWithRetry(s0, number, bytes, md5).guarantee(counters.stopped)).flatMap { etag =>
             record(PartRecord(number, md5, bytes.length.toLong)) *>
               counters.finished.as(UploadedPart(number, etag, bytes.length.toLong))
           }
