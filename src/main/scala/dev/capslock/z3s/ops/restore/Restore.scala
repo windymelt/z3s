@@ -171,10 +171,10 @@ private[restore] final case class TreeMemberPlan(
 )
 
 /** restore --recursiveで、失敗したdatasetと、先祖の失敗により飛ばしたdataset */
-private[restore] final case class TreeRestore(failed: List[(String, Throwable)], skipped: List[String]):
+private[restore] final case class TreeRestore(failed: List[Tree.Failure], skipped: List[String]):
   def hasFailedAncestor(dataset: String): Boolean =
-    (failed.map(_._1) ++ skipped).exists(a => dataset.startsWith(s"$a/"))
-  def fail(dataset: String, e: Throwable): TreeRestore = copy(failed = failed :+ (dataset -> e))
+    (failed.map(_.dataset) ++ skipped).exists(a => dataset.startsWith(s"$a/"))
+  def fail(dataset: String, e: Throwable): TreeRestore = copy(failed = failed.appended((dataset = dataset, error = e)))
   def skip(dataset: String): TreeRestore = copy(skipped = skipped :+ dataset)
 
 private[restore] object TreeRestore:

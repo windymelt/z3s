@@ -62,7 +62,7 @@ private[ops] final class Backup(ctx: OpsContext):
       position: String,
       snapshot: String,
       opts: BackupOptions
-  ): IO[Option[(String, Throwable)]] =
+  ): IO[Option[Tree.Failure]] =
     // ZFSネイティブ暗号化されたdatasetは、平文で送らないようにrawにする
     val mode = if ds.nativeEncrypted then SendMode.Raw else opts.mode
     val note = if ds.nativeEncrypted && opts.mode != SendMode.Raw then " (encrypted; sending raw)" else ""
@@ -75,7 +75,7 @@ private[ops] final class Backup(ctx: OpsContext):
 
     out(s"== $position ${ds.name}$note") *> run.attempt.flatMap {
       case Right(()) => IO.pure(None)
-      case Left(e)   => err(s"error: ${ds.name}: ${e.getMessage}").as(Some((ds.name, e)))
+      case Left(e)   => err(s"error: ${ds.name}: ${e.getMessage}").as(Some((dataset = ds.name, error = e)))
     }
 
   /** @param autoFull trueなら、S3にバックアップが1つもないdatasetをfullで送る */

@@ -6,14 +6,17 @@ import dev.capslock.z3s.*
 
 /** --recursiveの処理が共有する関数 */
 private[ops] object Tree:
+  /** 処理に失敗したdatasetとそのエラー */
+  type Failure = (dataset: String, error: Throwable)
+
   /** 木の処理で失敗したdatasetをまとめて1つのエラーにする。終了コードは、失敗の終了コードがすべて同じならそれを、異なれば1を使う */
-  def raiseFailures(failed: List[(String, Throwable)], skipped: List[String], total: Int): IO[Unit] =
-    val code = failed.map(_._2).map { case z: Z3SError => z.exitCode; case _ => 1 }.distinct match
+  def raiseFailures(failed: List[Failure], skipped: List[String], total: Int): IO[Unit] =
+    val code = failed.map(_.error).map { case z: Z3SError => z.exitCode; case _ => 1 }.distinct match
       case List(c) => c
       case _       => 1
     val skippedNote =
       if skipped.isEmpty then "" else s"; skipped because an ancestor failed: ${skipped.mkString(", ")}"
-    val message = s"${failed.size} of $total dataset(s) failed: ${failed.map(_._1).mkString(", ")}$skippedNote"
+    val message = s"${failed.size} of $total dataset(s) failed: ${failed.map(_.dataset).mkString(", ")}$skippedNote"
 
     IO.raiseError(Z3SError.fromExitCode(code, message)).whenA(failed.nonEmpty)
 
