@@ -51,6 +51,26 @@ class CompressorsSuite extends IOSpec:
       .map(sizes => forAll(sizes)(_ should be < (input.length / 10).toLong))
   }
 
+  def decompressAll(alg: Compression, compressed: Array[Byte]): IO[Array[Byte]] =
+    Stream.chunk(Chunk.array(compressed)).covary[IO].through(Compressors.decompress(alg)).compile.to(Array)
+
+  test("zstd detects a corrupted payload") {
+    // 乱数の部分は圧縮されずにそのまま格納されるので、1バイト変えても展開自体は通る
+    Stream.chunk(Chunk.array(data)).covary[IO].through(Compressors.compress(Compression.Zstd(3))).compile.to(Array).flatMap {
+      compressed =>
+        compressed(1000) = (compressed(1000) ^ 1).toByte
+        decompressAll(Compression.Zstd(3), compressed).attempt.map(_.isLeft shouldBe true)
+    }
+  }
+
+  test("zstd decompresses frames without a checksum") {
+    val buffer = new java.io.ByteArrayOutputStream()
+    val zstd = new com.github.luben.zstd.ZstdOutputStream(buffer, 3)
+    zstd.write(data)
+    zstd.close()
+    decompressAll(Compression.Zstd(3), buffer.toByteArray).map(out => ByteVector(out) should === (ByteVector(data)))
+  }
+
   /** 圧縮しにくいデータを終わりなく流す */
   val endless: Stream[IO, Byte] =
     val rnd = new scala.util.Random(1)
