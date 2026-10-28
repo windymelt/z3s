@@ -6,6 +6,7 @@ import cats.syntax.all.*
 import dev.capslock.z3s.age.X25519Identity
 import dev.capslock.z3s.codec.index.IndexCodec
 import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
+import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions, StatusRow}
 import scodec.bits.ByteVector
 
 /** zfsとS3をフェイクに置き換え、backupからrestoreまでを実行する */
