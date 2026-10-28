@@ -29,6 +29,10 @@ final case class BackupOptions(
     case SendMode.Plain(_, Encryption.None) => true
     case SendMode.Plain(_, Encryption.Age(_)) => false)
 
+  /** --recursiveで木の中の1つのdatasetを送るときの設定を返す。子孫は呼び出し元が1つずつ処理するので、recursiveを外す */
+  def forTreeMember(snapshot: String, mode: SendMode): BackupOptions =
+    copy(snapshot = Some(snapshot), mode = mode, recursive = false)
+
 /** backupサブコマンドを処理する。スナップショットをzfs sendで送ってS3にアップロードし、インデックスに加える */
 private[ops] final class Backup(ctx: OpsContext):
   import ctx.{common, err, now, out, progress, store, zfs}
@@ -68,7 +72,7 @@ private[ops] final class Backup(ctx: OpsContext):
     val mode = if ds.nativeEncrypted then SendMode.Raw else opts.mode
     val note = if ds.nativeEncrypted && opts.mode != SendMode.Raw then " (encrypted; sending raw)" else ""
     val child = Backup(ctx.forDataset(ds.name))
-    val childOpts = opts.copy(snapshot = Some(snapshot), mode = mode, recursive = false)
+    val childOpts = opts.forTreeMember(snapshot, mode)
     val run =
       for
         locals <- zfs.listSnapshots(ds.name)
