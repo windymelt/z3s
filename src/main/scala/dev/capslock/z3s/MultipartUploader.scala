@@ -122,7 +122,7 @@ final class MultipartUploader(
             val part = (recorded.get(number), onS3.get(number)) match
               case (Some(r), Some(p)) => reuse(number, bytes, md5, r, p)
               case _                  => send(number, bytes, md5)
-            part.map(p => (part = p, md5 = Md5.fromHex(md5)))
+            part.map(p => (uploadedPart = p, md5 = Md5.fromHex(md5)))
           }
 
         parts <- data
@@ -135,7 +135,7 @@ final class MultipartUploader(
           .parEvalMap(concurrency) { case (chunk, i) => processPart(i.toInt + 1, chunk.toArray) }
           .compile
           .toList
-        etag <- store.completeMultipartUpload(key, s0.uploadId, parts.map(_.part))
+        etag <- store.completeMultipartUpload(key, s0.uploadId, parts.map(_.uploadedPart))
         _ <- states.traverse_(_.delete(bucket, key))
-      yield UploadResult(etag, parts.map(_.part.size).sum, parts.map(_.md5))
+      yield UploadResult(etag, parts.map(_.uploadedPart.size).sum, parts.map(_.md5))
     }
