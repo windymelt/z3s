@@ -33,8 +33,13 @@ object MultipartEtag:
     * パートは最大10,000個なので、2MB程度になる
     */
   def partMd5s(partSize: Long): Pipe[IO, Byte, Md5] = in =>
+    /** mdに入れたバイト列のMD5を1つ出力する。MessageDigest.digestはmdを初期状態に戻すので、mdを次のパートに使える */
     def digest(md: MessageDigest): Pull[IO, Md5, Unit] = Pull.eval(IO(Md5(ByteVector(md.digest())))).flatMap(Pull.output1)
 
+    /** sを読んでmdに入れ、パートが埋まるたびにそのMD5を出力する。sが尽きたときに途中までのパートがあれば、そのMD5も出力する
+      *
+      * @param filled 処理中のパートにすでに入れたバイト数
+      */
     def go(s: Stream[IO, Byte], md: MessageDigest, filled: Long): Pull[IO, Md5, Unit] =
       s.pull.uncons.flatMap {
         case None => if filled > 0 then digest(md) else Pull.done
