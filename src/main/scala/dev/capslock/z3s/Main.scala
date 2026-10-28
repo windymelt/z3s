@@ -4,6 +4,7 @@ import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import cats.effect.{ExitCode, IO, IOApp}
 import cats.syntax.all.*
 import com.monovore.decline.*
+import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions}
 import java.net.URI
 import java.nio.file.{Files, Path}
 import dev.capslock.z3s.age.{X25519Identity, X25519Recipient}

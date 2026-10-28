@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
 import dev.capslock.z3s.age.X25519Identity
 import dev.capslock.z3s.codec.index.IndexCodec
+import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions}
 
 /** --recursiveによる子孫のdatasetのバックアップとstatus */
 class RecursiveSuite extends IOSpec:

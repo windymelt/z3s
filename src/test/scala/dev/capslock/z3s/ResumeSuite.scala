@@ -6,6 +6,7 @@ import dev.capslock.z3s.age.X25519Identity
 import dev.capslock.z3s.codec.header.HeaderCodec
 import dev.capslock.z3s.codec.index.IndexCodec
 import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
+import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions}
 import java.nio.file.{Files, Path}
 import scala.concurrent.duration.Duration
 import scala.jdk.CollectionConverters.*
