@@ -12,8 +12,10 @@ import java.time.Instant
 import java.time.format.DateTimeFormatter
 import scodec.bits.ByteVector
 import dev.capslock.z3s.age.{Age, X25519Identity, X25519Recipient}
+import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
 
 val IndexFileName = ".z3s-index.cbor"
+val PartDigestsDirName = ".z3s-parts"
 
 final case class Common(
     bucket: String,
@@ -27,6 +29,8 @@ final case class Common(
   def objectKey(snapshotName: String): String = s"$prefix$snapshotName"
   def objectPrefix: String = s"$prefix$dataset@"
   def indexKey: String = s"$prefix$dataset/$IndexFileName"
+  /** バックアップの一覧(objectPrefix)に入らないよう、indexと同じくdatasetの下に置く */
+  def partDigestsKey(snapshot: Snapshot): String = s"$prefix${snapshot.dataset}/$PartDigestsDirName/${snapshot.shortName}.cbor"
 
 final case class BackupOptions(
     full: Boolean,
@@ -188,7 +192,8 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
         mode = opts.mode,
         estimatedSize = estimated,
         createdAt = createdAt,
-        toolVersion = BuildInfo.version
+        toolVersion = BuildInfo.version,
+        partSize = Some(partSize)
       )
       _ <- out(
         s"${parentName.fold("full")(p => s"incremental from $p")} -> ${step.child.name}: " +
@@ -197,11 +202,12 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
       _ <- out(s"  ${ZfsCommands.show(ZfsCommands.send(step.child.name, parentName, raw))}")
       _ <-
         if common.dryRun then IO.unit
-        else upload(key, header, parentName, partSize, opts, s"$position ${step.child.name}")
+        else upload(key, step.child, header, parentName, partSize, opts, s"$position ${step.child.name}")
     yield ()
 
   private def upload(
       key: String,
+      snapshot: Snapshot,
       header: Header,
       parentName: Option[String],
       partSize: Long,
@@ -260,11 +266,19 @@ final class Ops(common: Common, zfs: Zfs, store: ObjectStore, uploadRetryBase: F
       )
       uploadedAt <- now
       _ <- out(s"uploaded $key (${result.size} bytes)")
+      _ <- savePartDigests(snapshot, PartDigests(effectivePartSize.toLong, result.size, result.partMd5s))
       entry = IndexEntry(key, effectiveHeader, result.size, result.etag, uploadedAt.toString)
       _ <- indexStore.update(_.upsert(entry)).void.adaptError { case e =>
         Z3SError.Runtime(s"$key was uploaded, but updating the index failed (${e.getMessage}); run `z3s reindex`", e)
       }
     yield ()
+
+  /** 失敗してもバックアップ自体は使えるので、警告にとどめる。一覧がなくても、オブジェクト全体を読めばETagと照合できる */
+  private def savePartDigests(snapshot: Snapshot, digests: PartDigests): IO[Unit] =
+    val key = common.partDigestsKey(snapshot)
+    store
+      .put(key, PartDigestsCodec.encode(digests))
+      .handleErrorWith(e => err(s"warning: failed to save the part MD5s to $key: ${e.getMessage}"))
 
   /** 中断したuploadの状態があり、同じスナップショットとmodeなら再開する。そうでなければ古いuploadをabortする */
   private def prepareResume(states: StateStore, key: String, header: Header, noResume: Boolean): IO[Option[Resume]] =

@@ -105,7 +105,8 @@ aws s3api put-bucket-lifecycle-configuration --bucket my-backups --lifecycle-con
 - オブジェクトの先頭は magic `5a 33 53 42 55 50 00 00` ("Z3SBUP\0\0")、format version (u16 BE、現在は 1)、ヘッダ長 (u32 BE、65,536 以下)、ヘッダ (CBOR) の順に並び、その後ろが payload です。
 - payload は、raw では `zfs send -w` の出力そのまま、plain では `zfs send` の出力を圧縮したものです。age で暗号化する場合は「ヘッダの SHA-256 (32 バイト) + 圧縮済みストリーム」を age 形式で暗号化します。復元時にはこの 32 バイトを平文ヘッダと照合します。
 - zstd で圧縮する場合は、展開後の内容のチェックサム (XXH64) をフレームに付け、復元時に照合します。チェックサムの付いていないオブジェクトも復元できます。
-- ヘッダは文字列キーの CBOR map で、未知のキーは無視してデコードします。
+- ヘッダは文字列キーの CBOR map で、未知のキーは無視してデコードします。`partSize` は multipart upload のパートの大きさです。このキーを追加する前にアップロードしたオブジェクトのヘッダにはありません。
+- 各パートの MD5 を `{prefix}{dataset}/.z3s-parts/{snapshot}.cbor` に保存します。中身は CBOR map で、`schemaVersion` (1)、`partSize`、`size` (オブジェクトの大きさ)、`md5` (パートの順に並べた 16 バイトのバイト列の配列) を持ちます。Amazon S3、MinIO、さくらのオブジェクトストレージは、multipart のオブジェクトの ETag を「各パートの MD5 をつなげたものの MD5-パート数」として計算するので、この一覧を ETag と照合できます。Amazon S3 で SSE-KMS や SSE-C により暗号化したオブジェクトは、この計算になりません。一覧の保存に失敗した場合は警告を出し、バックアップは成功として扱います。バックアップのオブジェクトを削除するときは、一覧も削除してください。
 - 補助情報として user metadata の `z3s-format` と `z3s-parent` を付けます。処理の判断には使いません。
 
 ## テスト

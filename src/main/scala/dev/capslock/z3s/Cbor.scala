@@ -8,10 +8,10 @@ object Cbor:
   private[z3s] def fail(msg: String): Nothing = throw new IllegalArgumentException(msg)
 
   /** 符号なし64ビット値を`Long`のビット列のまま書く */
-  private def writeU64(w: Writer, v: Long): Writer =
+  private[z3s] def writeU64(w: Writer, v: Long): Writer =
     if v >= 0 then w.writeLong(v) else w.writeOverLong(negative = false, v)
 
-  private def readU64(r: Reader): Long =
+  private[z3s] def readU64(r: Reader): Long =
     if r.hasOverLong then r.readOverLong()
     else
       val v = r.readLong()
@@ -146,7 +146,7 @@ object Cbor:
   }
 
   given Encoder[Header] = Encoder { (w, h) =>
-    w.writeMapHeader(if h.parent.isDefined then 8 else 7)
+    w.writeMapHeader(7 + h.parent.size + h.partSize.size)
     w.writeString("snapshot").writeString(h.snapshot)
     w.writeString("guid"); writeU64(w, h.guid)
     w.writeString("createtxg"); writeU64(w, h.createtxg)
@@ -155,6 +155,8 @@ object Cbor:
     w.writeString("estimatedSize"); writeU64(w, h.estimatedSize)
     w.writeString("createdAt").writeString(h.createdAt)
     w.writeString("toolVersion").writeString(h.toolVersion)
+    h.partSize.foreach(n => writeU64(w.writeString("partSize"), n))
+    w
   }
 
   given Decoder[Header] = Decoder { r =>
@@ -166,6 +168,7 @@ object Cbor:
     var estimatedSize: Option[Long] = scala.None
     var createdAt: Option[String] = scala.None
     var toolVersion: Option[String] = scala.None
+    var partSize: Option[Long] = scala.None
     readMap(r) {
       case "snapshot"      => r => snapshot = Some(r.readString())
       case "guid"          => r => guid = Some(readU64(r))
@@ -175,6 +178,7 @@ object Cbor:
       case "estimatedSize" => r => estimatedSize = Some(readU64(r))
       case "createdAt"     => r => createdAt = Some(r.readString())
       case "toolVersion"   => r => toolVersion = Some(r.readString())
+      case "partSize"      => r => partSize = Some(readU64(r))
     }
     Header(
       required("snapshot", snapshot),
@@ -184,7 +188,8 @@ object Cbor:
       required("mode", mode),
       required("estimatedSize", estimatedSize),
       required("createdAt", createdAt),
-      required("toolVersion", toolVersion)
+      required("toolVersion", toolVersion),
+      partSize
     )
   }
 

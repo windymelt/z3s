@@ -76,8 +76,13 @@ final class InMemoryStore extends ObjectStore:
 
   private def nextEtag: IO[String] = counter.updateAndGet(_ + 1).map(n => s"\"etag-$n\"")
 
+  /** putを失敗させるキー */
+  val failingPuts: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
+
   def put(key: String, bytes: Array[Byte]): IO[Unit] =
-    nextEtag.flatMap(etag => objects.update(_.updated(key, StoredObject(bytes, etag, Instant.EPOCH, Map.empty))))
+    failingPuts.get.flatMap { failing =>
+      IO.raiseError(new java.io.IOException(s"injected put failure for $key")).whenA(failing.contains(key))
+    } *> nextEtag.flatMap(etag => objects.update(_.updated(key, StoredObject(bytes, etag, Instant.EPOCH, Map.empty))))
 
   def list(prefix: String): Stream[IO, ObjectInfo] =
     Stream.evalSeq(objects.get.map(_.toList.sortBy(_._1).collect {

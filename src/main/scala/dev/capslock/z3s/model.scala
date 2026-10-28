@@ -1,6 +1,7 @@
 package dev.capslock.z3s
 
 import cats.data.NonEmptyList
+import scodec.bits.ByteVector
 
 enum SendMode:
   case Raw
@@ -79,9 +80,20 @@ final case class Header(
     mode: SendMode,
     estimatedSize: Long,
     createdAt: String,
-    toolVersion: String
+    toolVersion: String,
+    /** multipart uploadのパートの大きさ。古いバージョンが書いたヘッダにはない */
+    partSize: Option[Long] = None
 ):
   def isFull: Boolean = parent.isEmpty
+
+final case class Md5(bytes: ByteVector) extends AnyVal:
+  def hex: String = bytes.toHex
+
+object Md5:
+  def fromHex(hex: String): Md5 = Md5(ByteVector.fromValidHex(hex))
+
+/** バックアップのオブジェクトの各パートのMD5。多くのS3互換ストレージでは、ETagをこれらから計算して照合できる */
+final case class PartDigests(partSize: Long, size: Long, partMd5s: List[Md5])
 
 final case class IndexEntry(
     key: String,

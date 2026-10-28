@@ -71,16 +71,19 @@ final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectS
       .map(r => Option((r.asByteArray(), r.response().eTag())))
       .recover { case e if status(e).contains(404) => None }
 
-  private def put(b: PutObjectRequest.Builder, bytes: Array[Byte]): IO[PutResult] =
+  def put(key: String, bytes: Array[Byte]): IO[Unit] =
+    call(client.putObject(PutObjectRequest.builder().bucket(bucket).key(key).build(), AsyncRequestBody.fromBytes(bytes))).void
+
+  private def conditionalPut(b: PutObjectRequest.Builder, bytes: Array[Byte]): IO[PutResult] =
     call(client.putObject(b.bucket(bucket).build(), AsyncRequestBody.fromBytes(bytes)))
       .map(r => PutResult.Written(r.eTag()))
       .recover { case e if isPreconditionFailure(e) => PutResult.PreconditionFailed }
 
   def putIfAbsent(key: String, bytes: Array[Byte]): IO[PutResult] =
-    put(PutObjectRequest.builder().key(key).ifNoneMatch("*"), bytes)
+    conditionalPut(PutObjectRequest.builder().key(key).ifNoneMatch("*"), bytes)
 
   def putIfMatch(key: String, bytes: Array[Byte], etag: String): IO[PutResult] =
-    put(PutObjectRequest.builder().key(key).ifMatch(etag), bytes)
+    conditionalPut(PutObjectRequest.builder().key(key).ifMatch(etag), bytes)
 
   def createMultipartUpload(key: String, metadata: Map[String, String], storageClass: Option[String]): IO[String] =
     val b = CreateMultipartUploadRequest.builder().bucket(bucket).key(key).metadata(metadata.asJava)

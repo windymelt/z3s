@@ -2,8 +2,9 @@ package dev.capslock.z3s
 
 import cats.data.NonEmptyList
 import cats.effect.IO
+import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
 import fs2.{Chunk, Stream}
-import io.bullet.borer.Cbor as BorerCbor
+import io.bullet.borer.{Cbor as BorerCbor, Dom}
 import org.scalatest.Assertion
 import scodec.bits.*
 
@@ -28,7 +29,9 @@ class FrameSuite extends IOSpec:
       SendMode.Plain(Compression.Bzip2(9), Encryption.None),
       header.mode
     )
-    val headers = for mode <- modes; parent <- List(None, header.parent) yield header.copy(mode = mode, parent = parent)
+    val headers =
+      for mode <- modes; parent <- List(None, header.parent); partSize <- List(None, Some(5L * 1024 * 1024))
+      yield header.copy(mode = mode, parent = parent, partSize = partSize)
     forAll(headers)(h => Cbor.decodeHeader(Cbor.encodeHeader(h)) should === (Right(h))): Assertion
   }
 
@@ -48,6 +51,22 @@ class FrameSuite extends IOSpec:
     val count = known(0) & 0x1f
     val merged = Array((0xa0 | (count + 2)).toByte) ++ known.drop(1) ++ extra.drop(1)
     Cbor.decodeHeader(merged) should === (Right(header))
+  }
+
+  test("part digests round trip, and an MD5 of the wrong length is rejected") {
+    val digests = PartDigests(5L * 1024 * 1024, 12L * 1024 * 1024, List("00" * 16, "0123456789abcdef" * 2, "ff" * 16).map(Md5.fromHex))
+    val bytes = PartDigestsCodec.encode(digests)
+    PartDigestsCodec.decode(bytes) should === (Right(digests))
+    // MD5を15バイトにした一覧
+    val shortened = BorerCbor
+      .encode(Map[String, Dom.Element](
+        "schemaVersion" -> Dom.IntElem(1),
+        "partSize" -> Dom.IntElem(1),
+        "size" -> Dom.IntElem(1),
+        "md5" -> Dom.ArrayElem.Sized(Dom.ByteArrayElem(new Array[Byte](15)))
+      ))
+      .toByteArray
+    PartDigestsCodec.decode(shortened).left.value should include ("MD5 must be 16 bytes, got 15")
   }
 
   test("frame round trip") {
