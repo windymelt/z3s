@@ -90,7 +90,8 @@ final case class Md5(bytes: ByteVector) extends AnyVal:
   def hex: String = bytes.toHex
 
 object Md5:
-  def fromHex(hex: String): Md5 = Md5(ByteVector.fromValidHex(hex))
+  /** 16バイトを表す16進の文字列でなければNoneを返す */
+  def fromHex(hex: String): Option[Md5] = ByteVector.fromHex(hex).filter(_.size == 16).map(Md5(_))
 
 /** バックアップのオブジェクトの各パートのMD5。多くのS3互換ストレージでは、ETagをこれらから計算して照合できる */
 final case class PartDigests(partSize: Long, size: Long, partMd5s: List[Md5])

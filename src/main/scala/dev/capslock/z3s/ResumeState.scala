@@ -9,7 +9,7 @@ import java.security.MessageDigest
 import scodec.bits.ByteVector
 
 /** アップロード済みのパート。md5は再開時に作り直したパートと照合する */
-final case class PartRecord(number: Int, md5: String, size: Long)
+final case class PartRecord(number: Int, md5: Md5, size: Long)
 
 /** 中断したmultipart uploadを再開するための状態。暗号化しないmodeでだけ保存するので秘密を含まない */
 final case class UploadState(
@@ -39,7 +39,7 @@ object UploadState:
     s.parts.foreach { p =>
       w.writeMapStart()
       w.writeString("number").writeInt(p.number)
-      w.writeString("md5").writeString(p.md5)
+      w.writeString("md5").writeString(p.md5.hex)
       w.writeString("size").writeLong(p.size)
       w.writeBreak()
     }
@@ -49,11 +49,14 @@ object UploadState:
 
   given Decoder[PartRecord] = Decoder { r =>
     var number: Option[Int] = None
-    var md5: Option[String] = None
+    var md5: Option[Md5] = None
     var size: Option[Long] = None
     Cbor.readMap(r) {
       case "number" => r => number = Some(r.readInt())
-      case "md5"    => r => md5 = Some(r.readString())
+      case "md5" =>
+        r =>
+          val hex = r.readString()
+          md5 = Some(Md5.fromHex(hex).getOrElse(Cbor.fail(s"invalid MD5: $hex")))
       case "size"   => r => size = Some(r.readLong())
     }
     PartRecord(Cbor.required("number", number), Cbor.required("md5", md5), Cbor.required("size", size))

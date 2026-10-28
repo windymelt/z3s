@@ -54,7 +54,7 @@ class FrameSuite extends IOSpec:
   }
 
   test("part digests round trip, and an MD5 of the wrong length is rejected") {
-    val digests = PartDigests(5L * 1024 * 1024, 12L * 1024 * 1024, List("00" * 16, "0123456789abcdef" * 2, "ff" * 16).map(Md5.fromHex))
+    val digests = PartDigests(5L * 1024 * 1024, 12L * 1024 * 1024, List("00" * 16, "0123456789abcdef" * 2, "ff" * 16).flatMap(Md5.fromHex))
     val bytes = PartDigestsCodec.encode(digests)
     PartDigestsCodec.decode(bytes) should === (Right(digests))
     // MD5を15バイトにした一覧

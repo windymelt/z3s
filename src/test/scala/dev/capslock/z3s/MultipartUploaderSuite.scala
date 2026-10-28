@@ -26,7 +26,7 @@ class MultipartUploaderSuite extends UnitSpec, ScalaCheckPropertyChecks:
 
   test("the MD5 computed in slices matches the MD5 of the whole part") {
     forAll(parts, minSuccessful(30)) { bytes =>
-      val expected = ByteVector(MessageDigest.getInstance("MD5").digest(bytes)).toHex
-      MultipartUploader.md5Hex(bytes).unsafeRunSync() should === (expected)
+      val expected = Md5(ByteVector(MessageDigest.getInstance("MD5").digest(bytes)))
+      MultipartUploader.md5(bytes).unsafeRunSync() should === (expected)
     }
   }

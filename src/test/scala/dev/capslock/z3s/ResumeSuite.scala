@@ -92,7 +92,7 @@ class ResumeSuite extends IOSpec:
       e <- env
       _ <- interrupt(e, raw)
       saved <- e.states.load("bucket", objectKey)
-      _ <- e.states.save(saved.value.copy(parts = saved.value.parts.map(_.copy(md5 = "0" * 32))))
+      _ <- e.states.save(saved.value.copy(parts = saved.value.parts.map(_.copy(md5 = Md5(ByteVector.low(16))))))
       mismatch <- backup(e, raw).attempt
       aborted <- e.store.aborted.get
       afterMismatch <- stateFiles(e.dir)
@@ -152,19 +152,26 @@ class ResumeSuite extends IOSpec:
       dir <- IO.blocking(Files.createTempDirectory("z3s-state"))
       logs <- Ref.of[IO, List[String]](Nil)
       states = StateStore(dir, m => logs.update(_ :+ m))
-      state = UploadState("b", "k", "id", 5 * MiB, ByteVector(1, 2, 3), List(PartRecord(1, "ab" * 16, 5L * MiB)))
+      state = UploadState("b", "k", "id", 5 * MiB, ByteVector(1, 2, 3), List(PartRecord(1, Md5(ByteVector.fill(16)(0xab)), 5L * MiB)))
       _ <- states.save(state)
+      saved <- IO.blocking(Files.readString(states.path("b", "k")))
       loaded <- states.load("b", "k")
       other <- states.load("b", "other")
       _ <- IO.blocking(Files.writeString(states.path("b", "k"), "{broken"))
       broken <- states.load("b", "k")
+      _ <- IO.blocking(Files.writeString(states.path("b", "k"), saved.replace("ab" * 16, "ab" * 15)))
+      badMd5 <- states.load("b", "k")
       _ <- states.delete("b", "k")
       messages <- logs.get
     yield
+      // MD5は以前と同じく16進の文字列で書く
+      saved should include ("\"md5\":\"" + "ab" * 16 + "\"")
       loaded should === (Some(state))
       other should === (None)
       broken should === (None)
-      messages should have size 2
+      badMd5 should === (None)
+      messages should have size 3
       messages(0) should startWith("warning: ignoring unreadable resume state")
-      messages(1) should === (s"removed resume state ${states.path("b", "k")}")
+      messages(1) should startWith("warning: ignoring unreadable resume state")
+      messages(2) should === (s"removed resume state ${states.path("b", "k")}")
   }
