@@ -214,8 +214,15 @@ class S3IntegrationSuite extends IOSpec:
         index <- ops.reindex
         _ <- ops.restore(RestoreOptions("b", Some("pool/r"), force = false, None))
         got <- zfs.received.get
+        digests <- store.getWithEtag("p/tank/data/.z3s-parts/a.cbor")
+        head <- store.head("p/tank/data@a")
       yield
         index.entries.map(_.key) should === (List("p/tank/data@a", "p/tank/data@b"))
+        // 保存したパートのMD5一覧から、サーバが返すETagと同じ値を計算できる
+        val md5s = Cbor.decodePartDigests(digests.value._1).value.md5s
+        val joined = md5s.map(ByteVector.fromValidHex(_)).reduce(_ ++ _)
+        val etag = ByteVector(java.security.MessageDigest.getInstance("MD5").digest(joined.toArray)).toHex
+        head.value.etag should === (s"\"$etag-${md5s.size}\"")
         got.map(_._2.toList) should === (List(
           zfs.streamFor(snapshots(0), None, false).toList,
           zfs.streamFor(snapshots(1), Some("tank/data@a"), false).toList

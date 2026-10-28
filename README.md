@@ -105,7 +105,8 @@ aws s3api put-bucket-lifecycle-configuration --bucket my-backups --lifecycle-con
 - An object starts with the magic `5a 33 53 42 55 50 00 00` ("Z3SBUP\0\0"), followed by the format version (u16 BE, currently 1), the header length (u32 BE, at most 65,536) and the CBOR header. The payload follows.
 - In raw mode the payload is the output of `zfs send -w`. In plain mode it is the compressed output of `zfs send`. With age encryption, z3s encrypts "SHA-256 of the header (32 bytes) + compressed stream", and checks those 32 bytes against the plaintext header on restore.
 - zstd frames carry a checksum (XXH64) of the decompressed content, which is checked on restore. Objects written without it can still be restored.
-- The header is a CBOR map with string keys. Unknown keys are ignored when decoding.
+- The header is a CBOR map with string keys. Unknown keys are ignored when decoding. `partSize` is the part size of the multipart upload. Objects uploaded before this key was added do not have it.
+- The MD5 of each part is stored at `{prefix}{dataset}/.z3s-parts/{snapshot}.cbor`, a CBOR map with `schemaVersion` (1), `partSize`, `size` (the object size) and `md5` (an array of 16-byte strings, in part order). Amazon S3, MinIO and Sakura Object Storage compute the ETag of a multipart object as MD5(concatenated part MD5s)-(number of parts), so the list can be checked against the ETag. This does not hold for objects encrypted with SSE-KMS or SSE-C on Amazon S3. If saving the list fails, z3s prints a warning and the backup still succeeds. When you delete a backup object, delete its list too.
 - The user metadata `z3s-format` and `z3s-parent` are informational only.
 
 ## Tests

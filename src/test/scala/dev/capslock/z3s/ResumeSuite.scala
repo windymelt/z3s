@@ -54,6 +54,7 @@ class ResumeSuite extends IOSpec:
         left <- stateFiles(e.dir)
         _ <- e.ops.restore(RestoreOptions("daily-1", Some("pool/r"), force = false, None))
         received <- e.zfs.received.get
+        objects <- e.store.objects.get
       yield
         error.getMessage should include("injected failure for part 3")
         saved.value.parts.map(_.number) should === (List(1, 2))
@@ -63,6 +64,11 @@ class ResumeSuite extends IOSpec:
         Cbor.encodeHeader(index.value.entries.head.header).toSeq should === (saved.value.header.toSeq)
         left should === (Nil)
         received.map(_._2.toList) should === (List(e.zfs.streamFor(snapshot, None, mode == raw).toList))
+        // 送り直さなかったパートのMD5も、中断前の記録から一覧に入る
+        val digests = Cbor.decodePartDigests(objects("backups/tank/data/.z3s-parts/daily-1.cbor").bytes).value
+        digests.md5s should === (objects(objectKey).bytes.grouped(5 * MiB).toList.map(p =>
+          ByteVector(java.security.MessageDigest.getInstance("MD5").digest(p)).toHex
+        ))
     }
 
   test("an interrupted age-encrypted backup is aborted and leaves no state") {

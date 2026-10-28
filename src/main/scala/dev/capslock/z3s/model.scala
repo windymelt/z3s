@@ -79,9 +79,14 @@ final case class Header(
     mode: SendMode,
     estimatedSize: Long,
     createdAt: String,
-    toolVersion: String
+    toolVersion: String,
+    /** multipart uploadのパートの大きさ。古いバージョンが書いたヘッダにはない */
+    partSize: Option[Long] = None
 ):
   def isFull: Boolean = parent.isEmpty
+
+/** バックアップのオブジェクトの各パートのMD5(16進)。多くのS3互換ストレージでは、ETagをこれらから計算して照合できる */
+final case class PartDigests(partSize: Long, size: Long, md5s: List[String])
 
 final case class IndexEntry(
     key: String,

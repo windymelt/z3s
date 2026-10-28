@@ -119,9 +119,10 @@ final class MultipartUploader(
 
         processPart = (number: Int, bytes: Array[Byte]) =>
           MultipartUploader.md5Hex(bytes).flatMap { md5 =>
-            (recorded.get(number), onS3.get(number)) match
+            val part = (recorded.get(number), onS3.get(number)) match
               case (Some(r), Some(p)) => reuse(number, bytes, md5, r, p)
               case _                  => send(number, bytes, md5)
+            part.map(_ -> md5)
           }
 
         parts <- data
@@ -134,7 +135,7 @@ final class MultipartUploader(
           .parEvalMap(concurrency) { case (chunk, i) => processPart(i.toInt + 1, chunk.toArray) }
           .compile
           .toList
-        etag <- store.completeMultipartUpload(key, s0.uploadId, parts)
+        etag <- store.completeMultipartUpload(key, s0.uploadId, parts.map(_._1))
         _ <- states.traverse_(_.delete(bucket, key))
-      yield UploadResult(etag, parts.map(_.size).sum)
+      yield UploadResult(etag, parts.map(_._1.size).sum, parts.map(_._2))
     }

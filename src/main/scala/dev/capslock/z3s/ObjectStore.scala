@@ -10,7 +10,8 @@ enum PutResult:
   case Written(etag: String)
   case PreconditionFailed
 
-final case class UploadResult(etag: String, size: Long)
+/** md5sはパートの順に並べた各パートのMD5(16進) */
+final case class UploadResult(etag: String, size: Long, md5s: List[String])
 
 final case class UploadedPart(number: Int, etag: String, size: Long)
 
@@ -22,6 +23,8 @@ trait ObjectStore:
   def get(key: String): Stream[IO, Byte]
   /** 内容とETagを返す。存在しなければNone */
   def getWithEtag(key: String): IO[Option[(Array[Byte], String)]]
+  /** 同名のオブジェクトがあれば上書きする */
+  def put(key: String, bytes: Array[Byte]): IO[Unit]
   def putIfAbsent(key: String, bytes: Array[Byte]): IO[PutResult]
   def putIfMatch(key: String, bytes: Array[Byte], etag: String): IO[PutResult]
   /** uploadIdを返す */

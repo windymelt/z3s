@@ -2,8 +2,9 @@ package dev.capslock.z3s
 
 import cats.data.NonEmptyList
 import io.bullet.borer.{Cbor as BorerCbor, Decoder, Encoder, Reader, Writer}
+import scodec.bits.ByteVector
 
-/** ヘッダとインデックスのCBOR表現。mapは文字列キーとし、デコード時は未知のキーを読み飛ばす */
+/** ヘッダとインデックスとパートのMD5一覧のCBOR表現。mapは文字列キーとし、デコード時は未知のキーを読み飛ばす */
 object Cbor:
   private[z3s] def fail(msg: String): Nothing = throw new IllegalArgumentException(msg)
 
@@ -146,7 +147,7 @@ object Cbor:
   }
 
   given Encoder[Header] = Encoder { (w, h) =>
-    w.writeMapHeader(if h.parent.isDefined then 8 else 7)
+    w.writeMapHeader(7 + h.parent.size + h.partSize.size)
     w.writeString("snapshot").writeString(h.snapshot)
     w.writeString("guid"); writeU64(w, h.guid)
     w.writeString("createtxg"); writeU64(w, h.createtxg)
@@ -155,6 +156,8 @@ object Cbor:
     w.writeString("estimatedSize"); writeU64(w, h.estimatedSize)
     w.writeString("createdAt").writeString(h.createdAt)
     w.writeString("toolVersion").writeString(h.toolVersion)
+    h.partSize.foreach(n => writeU64(w.writeString("partSize"), n))
+    w
   }
 
   given Decoder[Header] = Decoder { r =>
@@ -166,6 +169,7 @@ object Cbor:
     var estimatedSize: Option[Long] = scala.None
     var createdAt: Option[String] = scala.None
     var toolVersion: Option[String] = scala.None
+    var partSize: Option[Long] = scala.None
     readMap(r) {
       case "snapshot"      => r => snapshot = Some(r.readString())
       case "guid"          => r => guid = Some(readU64(r))
@@ -175,6 +179,7 @@ object Cbor:
       case "estimatedSize" => r => estimatedSize = Some(readU64(r))
       case "createdAt"     => r => createdAt = Some(r.readString())
       case "toolVersion"   => r => toolVersion = Some(r.readString())
+      case "partSize"      => r => partSize = Some(readU64(r))
     }
     Header(
       required("snapshot", snapshot),
@@ -184,8 +189,40 @@ object Cbor:
       required("mode", mode),
       required("estimatedSize", estimatedSize),
       required("createdAt", createdAt),
-      required("toolVersion", toolVersion)
+      required("toolVersion", toolVersion),
+      partSize
     )
+  }
+
+  given Encoder[PartDigests] = Encoder { (w, d) =>
+    w.writeMapHeader(4)
+    w.writeString("schemaVersion").writeInt(PartDigestsSchemaVersion)
+    w.writeString("partSize"); writeU64(w, d.partSize)
+    w.writeString("size"); writeU64(w, d.size)
+    w.writeString("md5").writeArrayHeader(d.md5s.size)
+    d.md5s.foreach(m => w.writeBytes(ByteVector.fromValidHex(m).toArray))
+    w
+  }
+
+  given Decoder[PartDigests] = Decoder { r =>
+    var schemaVersion: Option[Int] = scala.None
+    var partSize: Option[Long] = scala.None
+    var size: Option[Long] = scala.None
+    var md5s: Option[List[String]] = scala.None
+    readMap(r) {
+      case "schemaVersion" => r => schemaVersion = Some(r.readInt())
+      case "partSize"      => r => partSize = Some(readU64(r))
+      case "size"          => r => size = Some(readU64(r))
+      case "md5" =>
+        r =>
+          md5s = Some(readArray(r) { r =>
+            val b = r.readByteArray()
+            if b.length != 16 then fail(s"MD5 must be 16 bytes, got ${b.length}") else ByteVector(b).toHex
+          })
+    }
+    required("schemaVersion", schemaVersion) match
+      case PartDigestsSchemaVersion => PartDigests(required("partSize", partSize), required("size", size), required("md5", md5s))
+      case other                    => fail(s"unsupported part digests schema version $other")
   }
 
   given Encoder[IndexEntry] = Encoder { (w, e) =>
@@ -243,6 +280,13 @@ object Cbor:
     BorerCbor.decode(bytes).to[Header].valueEither.left.map(e => s"invalid header: ${e.getMessage}")
 
   def encodeIndex(i: Index): Array[Byte] = BorerCbor.encode(i).toByteArray
+
+  private val PartDigestsSchemaVersion = 1
+
+  def encodePartDigests(d: PartDigests): Array[Byte] = BorerCbor.encode(d).toByteArray
+
+  def decodePartDigests(bytes: Array[Byte]): Either[String, PartDigests] =
+    BorerCbor.decode(bytes).to[PartDigests].valueEither.left.map(e => s"invalid part digests: ${e.getMessage}")
 
   def decodeIndex(bytes: Array[Byte]): Either[String, Index] =
     BorerCbor.decode(bytes).to[Index].valueEither.left.map(e => s"invalid index: ${e.getMessage}")

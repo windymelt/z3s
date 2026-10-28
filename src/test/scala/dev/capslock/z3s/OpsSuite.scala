@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
 import cats.syntax.all.*
 import dev.capslock.z3s.age.X25519Identity
+import scodec.bits.ByteVector
 
 /** zfsとS3をフェイクに置き換え、backupからrestoreまでを実行する */
 class OpsSuite extends IOSpec:
@@ -234,6 +235,42 @@ class OpsSuite extends IOSpec:
       parts <- e.store.partSizes.get
     // パートは並列に送るので、記録の順はパート番号の順と限らない。最後のパートだけが小さい
     yield parts.sorted.reverse.dropRight(1).distinct should === (List(5 * 1024 * 1024))
+  }
+
+  /** オブジェクトをpartSizeずつに分けた各パートのMD5 */
+  def partMd5s(bytes: Array[Byte], partSize: Int): List[String] =
+    bytes.grouped(partSize).toList.map(p => ByteVector(java.security.MessageDigest.getInstance("MD5").digest(p)).toHex)
+
+  test("the MD5 of each part is saved under the dataset, outside the backup listing") {
+    for
+      e <- env(payloadSize = 12 * 1024 * 1024)
+      _ <- e.ops.backup(backupOpts(SendMode.Raw, full = true))
+      index <- loadIndex(e.store)
+      objects <- e.store.objects.get
+      reindexed <- e.ops.reindex
+    yield
+      val entry = index.entries.head
+      val digests = Cbor.decodePartDigests(objects("backups/tank/data/.z3s-parts/daily-3.cbor").bytes).value
+      val bytes = objects(entry.key).bytes
+      entry.header.partSize should === (Some(5L * 1024 * 1024))
+      digests.partSize should === (5L * 1024 * 1024)
+      digests.size should === (bytes.length.toLong)
+      digests.md5s should have size 3
+      digests.md5s should === (partMd5s(bytes, 5 * 1024 * 1024))
+      index.entries should have size 1
+      reindexed.entries.map(_.key) should === (List(entry.key))
+  }
+
+  test("a failure to save the part MD5s does not fail the backup") {
+    for
+      e <- env()
+      _ <- e.store.failingPuts.set(Set("backups/tank/data/.z3s-parts/daily-3.cbor"))
+      _ <- e.ops.backup(backupOpts(SendMode.Raw, full = true))
+      index <- loadIndex(e.store)
+      objects <- e.store.objects.get
+    yield
+      index.entries.map(_.key) should === (List("backups/tank/data@daily-3"))
+      objects.keySet should not contain "backups/tank/data/.z3s-parts/daily-3.cbor"
   }
 
   test("status --json renders empty and populated results") {
