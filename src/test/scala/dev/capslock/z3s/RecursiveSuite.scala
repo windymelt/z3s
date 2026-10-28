@@ -3,6 +3,7 @@ package dev.capslock.z3s
 import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
 import dev.capslock.z3s.age.X25519Identity
+import dev.capslock.z3s.codec.Cbor
 
 /** --recursiveによる子孫のdatasetのバックアップとstatus */
 class RecursiveSuite extends IOSpec:

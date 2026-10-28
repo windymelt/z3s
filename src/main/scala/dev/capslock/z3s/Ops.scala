@@ -12,7 +12,8 @@ import java.time.Instant
 import java.time.format.DateTimeFormatter
 import scodec.bits.ByteVector
 import dev.capslock.z3s.age.{Age, X25519Identity, X25519Recipient}
-import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
+import dev.capslock.z3s.codec.Cbor
+import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
 
 val IndexFileName = ".z3s-index.cbor"
 val PartDigestsDirName = ".z3s-parts"

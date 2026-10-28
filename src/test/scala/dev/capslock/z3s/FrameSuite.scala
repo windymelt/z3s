@@ -2,7 +2,8 @@ package dev.capslock.z3s
 
 import cats.data.NonEmptyList
 import cats.effect.IO
-import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
+import dev.capslock.z3s.codec.Cbor
+import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
 import fs2.{Chunk, Stream}
 import io.bullet.borer.{Cbor as BorerCbor, Dom}
 import org.scalatest.Assertion

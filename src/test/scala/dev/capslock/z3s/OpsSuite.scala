@@ -4,7 +4,8 @@ import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
 import cats.syntax.all.*
 import dev.capslock.z3s.age.X25519Identity
-import dev.capslock.z3s.cbor.partdigests.PartDigestsCodec
+import dev.capslock.z3s.codec.Cbor
+import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
 import scodec.bits.ByteVector
 
 /** zfsとS3をフェイクに置き換え、backupからrestoreまでを実行する */

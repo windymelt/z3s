@@ -2,6 +2,7 @@ package dev.capslock.z3s
 
 import cats.effect.IO
 import cats.syntax.all.*
+import dev.capslock.z3s.codec.Cbor
 
 final class IndexStore(store: ObjectStore, val key: String):
   private val MaxAttempts = 5

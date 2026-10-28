@@ -1,7 +1,7 @@
-package dev.capslock.z3s.cbor.partdigests
+package dev.capslock.z3s.codec.partdigests
 
 import dev.capslock.z3s.{Md5, PartDigests}
-import dev.capslock.z3s.Cbor.{fail, readArray, readMap, readU64, required, writeU64}
+import dev.capslock.z3s.codec.BorerSupport.{fail, readArray, readMap, readU64, required, writeU64}
 import io.bullet.borer.{Cbor as BorerCbor, Decoder, Encoder}
 import scodec.bits.ByteVector
 
