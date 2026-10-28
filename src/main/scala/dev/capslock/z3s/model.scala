@@ -86,7 +86,7 @@ final case class Header(
 ):
   def isFull: Boolean = parent.isEmpty
 
-final case class Md5(bytes: ByteVector):
+final case class Md5(bytes: ByteVector) extends AnyVal:
   def hex: String = bytes.toHex
 
 object Md5:

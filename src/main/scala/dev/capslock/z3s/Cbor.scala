@@ -249,6 +249,5 @@ object Cbor:
 
   def encodeIndex(i: Index): Array[Byte] = BorerCbor.encode(i).toByteArray
 
-
   def decodeIndex(bytes: Array[Byte]): Either[String, Index] =
     BorerCbor.decode(bytes).to[Index].valueEither.left.map(e => s"invalid index: ${e.getMessage}")
