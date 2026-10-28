@@ -27,11 +27,11 @@ object MultipartUploader:
   private val DigestSliceSize = 1024 * 1024
 
   /** パートは100MBを超えることがあるため、分割して計算してほかのファイバーに実行を譲る */
-  private[z3s] def md5Hex(bytes: Array[Byte]): IO[String] =
+  private[z3s] def md5(bytes: Array[Byte]): IO[Md5] =
     IO(MessageDigest.getInstance("MD5")).flatMap { md =>
       (0 until bytes.length by DigestSliceSize).toList
         .traverse_(off => IO(md.update(bytes, off, math.min(DigestSliceSize, bytes.length - off))) *> IO.cede) *>
-        IO(ByteVector(md.digest()).toHex)
+        IO(Md5(ByteVector(md.digest())))
     }
 
 final class MultipartUploader(
@@ -81,7 +81,7 @@ final class MultipartUploader(
             s"run the same backup again to resume (state: ${st.path(bucket, key)})"
         )
 
-    def uploadWithRetry(s: UploadState, number: Int, bytes: Array[Byte], md5: String): IO[String] =
+    def uploadWithRetry(s: UploadState, number: Int, bytes: Array[Byte], md5: Md5): IO[String] =
       def attempt(n: Int): IO[String] =
         store.uploadPart(key, s.uploadId, number, bytes, md5).handleErrorWith { e =>
           if n >= UploadPartRetries then IO.raiseError(e)
@@ -102,7 +102,7 @@ final class MultipartUploader(
           states.traverse_(st => lock.lock.surround(state.updateAndGet(_.record(part)).flatMap(st.save)))
 
         // 作り直したパートが記録したMD5と一致し、S3上のパートとサイズも一致すれば、送らずにS3上のパートを使う
-        reuse = (number: Int, bytes: Array[Byte], md5: String, r: PartRecord, p: UploadedPart) =>
+        reuse = (number: Int, bytes: Array[Byte], md5: Md5, r: PartRecord, p: UploadedPart) =>
           if r.md5 == md5 && r.size == bytes.length && p.size == bytes.length then counters.finished.as(p)
           else
             IO.raiseError(
@@ -111,18 +111,18 @@ final class MultipartUploader(
               )
             )
 
-        send = (number: Int, bytes: Array[Byte], md5: String) =>
+        send = (number: Int, bytes: Array[Byte], md5: Md5) =>
           (counters.started *> uploadWithRetry(s0, number, bytes, md5).guarantee(counters.stopped)).flatMap { etag =>
             record(PartRecord(number, md5, bytes.length.toLong)) *>
               counters.finished.as(UploadedPart(number, etag, bytes.length.toLong))
           }
 
         processPart = (number: Int, bytes: Array[Byte]) =>
-          MultipartUploader.md5Hex(bytes).flatMap { md5 =>
+          MultipartUploader.md5(bytes).flatMap { md5 =>
             val part = (recorded.get(number), onS3.get(number)) match
               case (Some(r), Some(p)) => reuse(number, bytes, md5, r, p)
               case _                  => send(number, bytes, md5)
-            part.map(p => (uploadedPart = p, md5 = Md5.fromHex(md5)))
+            part.map(p => (uploadedPart = p, md5 = md5))
           }
 
         parts <- data

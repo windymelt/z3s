@@ -28,8 +28,8 @@ trait ObjectStore:
   def putIfMatch(key: String, bytes: Array[Byte], etag: String): IO[PutResult]
   /** uploadIdを返す */
   def createMultipartUpload(key: String, metadata: Map[String, String], storageClass: Option[String]): IO[String]
-  /** ETagを返す。md5HexはbytesのMD5で、サーバは受け取った内容と照合して一致しなければ拒否する */
-  def uploadPart(key: String, uploadId: String, number: Int, bytes: Array[Byte], md5Hex: String): IO[String]
+  /** ETagを返す。md5はbytesのMD5で、サーバは受け取った内容と照合して一致しなければ拒否する */
+  def uploadPart(key: String, uploadId: String, number: Int, bytes: Array[Byte], md5: Md5): IO[String]
   /** アップロード済みのパートを返す。uploadが存在しなければNone */
   def listParts(key: String, uploadId: String): IO[Option[List[UploadedPart]]]
   /** 同名のオブジェクトが既にある場合はZ3SError.Unresumableで失敗し、上書きしない */

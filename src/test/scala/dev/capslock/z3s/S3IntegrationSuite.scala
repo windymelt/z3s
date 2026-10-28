@@ -116,7 +116,7 @@ class S3IntegrationSuite extends IOSpec:
   }
 
   def uploadPart(store: S3ObjectStore, id: String, number: Int, bytes: Array[Byte]): IO[String] =
-    MultipartUploader.md5Hex(bytes).flatMap(store.uploadPart("obj", id, number, bytes, _))
+    MultipartUploader.md5(bytes).flatMap(store.uploadPart("obj", id, number, bytes, _))
 
   test("UploadPart is rejected when Content-MD5 does not match the part") {
     withStore { (_, store, _) =>
@@ -124,7 +124,7 @@ class S3IntegrationSuite extends IOSpec:
       for
         id <- store.createMultipartUpload("obj", Map.empty, None)
         // 空のデータのMD5なので、partとは一致しない
-        rejected <- store.uploadPart("obj", id, 1, part, "d41d8cd98f00b204e9800998ecf8427e").attempt
+        rejected <- store.uploadPart("obj", id, 1, part, Md5.fromHex("d41d8cd98f00b204e9800998ecf8427e").get).attempt
         accepted <- uploadPart(store, id, 1, part)
         _ <- store.abortMultipartUpload("obj", id)
       yield

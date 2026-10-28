@@ -130,11 +130,11 @@ final class InMemoryStore extends ObjectStore:
       uploads.update(_.updated(id, PendingUpload(key, metadata, Map.empty))).as(id)
     }
 
-  def uploadPart(key: String, uploadId: String, number: Int, bytes: Array[Byte], md5Hex: String): IO[String] =
-    (failPartsFrom.get, MultipartUploader.md5Hex(bytes)).tupled.flatMap {
+  def uploadPart(key: String, uploadId: String, number: Int, bytes: Array[Byte], md5: Md5): IO[String] =
+    (failPartsFrom.get, MultipartUploader.md5(bytes)).tupled.flatMap {
       case (Some(n), _) if number >= n => IO.raiseError(new java.io.IOException(s"injected failure for part $number"))
       // S3と同じく、Content-MD5が内容と一致しないパートを拒否する
-      case (_, actual) if actual != md5Hex => IO.raiseError(new Exception(s"BadDigest for part $number"))
+      case (_, actual) if actual != md5 => IO.raiseError(new Exception(s"BadDigest for part $number"))
       case _ =>
         uploadPartCalls.update(_ :+ number) *> partSizes.update(_ :+ bytes.length) *>
           uploads.modify { m =>
