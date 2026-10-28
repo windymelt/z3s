@@ -10,7 +10,7 @@ import scala.jdk.CollectionConverters.*
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3AsyncClient
-import software.amazon.awssdk.services.s3.model.{CreateBucketRequest, ListMultipartUploadsRequest}
+import software.amazon.awssdk.services.s3.model.{CreateBucketRequest, ListMultipartUploadsRequest, S3Exception}
 
 /** S3互換サーバに対する結合テスト。Z3S_IT_ENDPOINTが設定されている場合だけ実行する
   *
@@ -114,12 +114,30 @@ class S3IntegrationSuite extends IOSpec:
     }
   }
 
+  def uploadPart(store: S3ObjectStore, id: String, number: Int, bytes: Array[Byte]): IO[String] =
+    MultipartUploader.md5Hex(bytes).flatMap(store.uploadPart("obj", id, number, bytes, _))
+
+  test("UploadPart is rejected when Content-MD5 does not match the part") {
+    withStore { (_, store, _) =>
+      val part = data.take(PartSize)
+      for
+        id <- store.createMultipartUpload("obj", Map.empty, None)
+        // 空のデータのMD5なので、partとは一致しない
+        rejected <- store.uploadPart("obj", id, 1, part, "d41d8cd98f00b204e9800998ecf8427e").attempt
+        accepted <- uploadPart(store, id, 1, part)
+        _ <- store.abortMultipartUpload("obj", id)
+      yield
+        rejected.left.toOption.collect { case e: S3Exception => e.awsErrorDetails().errorCode() } should === (Some("BadDigest"))
+        accepted should not be empty
+    }
+  }
+
   test("ListParts returns uploaded parts, and None for an unknown upload") {
     withStore { (_, store, _) =>
       for
         id <- store.createMultipartUpload("obj", Map.empty, None)
-        _ <- store.uploadPart("obj", id, 1, data.take(PartSize))
-        _ <- store.uploadPart("obj", id, 2, data.slice(PartSize, PartSize + 10))
+        _ <- uploadPart(store, id, 1, data.take(PartSize))
+        _ <- uploadPart(store, id, 2, data.slice(PartSize, PartSize + 10))
         parts <- store.listParts("obj", id)
         _ <- store.abortMultipartUpload("obj", id)
         gone <- store.listParts("obj", id)

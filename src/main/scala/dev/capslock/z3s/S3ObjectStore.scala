@@ -7,6 +7,7 @@ import java.nio.ByteBuffer
 import java.util.concurrent.{CompletableFuture, CompletionException}
 import org.reactivestreams.FlowAdapters
 import scala.jdk.CollectionConverters.*
+import scodec.bits.ByteVector
 import software.amazon.awssdk.core.async.{AsyncRequestBody, AsyncResponseTransformer}
 import software.amazon.awssdk.core.checksums.{RequestChecksumCalculation, ResponseChecksumValidation}
 import software.amazon.awssdk.regions.Region
@@ -86,8 +87,15 @@ final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectS
     storageClass.foreach(b.storageClass)
     call(client.createMultipartUpload(b.build())).map(_.uploadId())
 
-  def uploadPart(key: String, uploadId: String, number: Int, bytes: Array[Byte]): IO[String] =
-    val req = UploadPartRequest.builder().bucket(bucket).key(key).uploadId(uploadId).partNumber(number).build()
+  def uploadPart(key: String, uploadId: String, number: Int, bytes: Array[Byte], md5Hex: String): IO[String] =
+    val req = UploadPartRequest
+      .builder()
+      .bucket(bucket)
+      .key(key)
+      .uploadId(uploadId)
+      .partNumber(number)
+      .contentMD5(ByteVector.fromValidHex(md5Hex).toBase64)
+      .build()
     call(client.uploadPart(req, AsyncRequestBody.fromBytesUnsafe(bytes))).map(_.eTag())
 
   def listParts(key: String, uploadId: String): IO[Option[List[UploadedPart]]] =
