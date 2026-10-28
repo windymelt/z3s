@@ -3,7 +3,7 @@ package dev.capslock.z3s
 import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
 import dev.capslock.z3s.age.X25519Identity
-import dev.capslock.z3s.codec.Cbor
+import dev.capslock.z3s.codec.index.IndexCodec
 
 /** --recursiveによる子孫のdatasetのバックアップとstatus */
 class RecursiveSuite extends IOSpec:
@@ -33,7 +33,7 @@ class RecursiveSuite extends IOSpec:
     e.ops.backup(BackupOptions(full, snapshot, mode, None, recursive = true))
 
   def entries(e: Env, dataset: String): IO[List[IndexEntry]] =
-    e.store.getWithEtag(s"backups/$dataset/.z3s-index.cbor").map(_.toList.flatMap(o => Cbor.decodeIndex(o._1).toOption.get.entries))
+    e.store.getWithEtag(s"backups/$dataset/.z3s-index.cbor").map(_.toList.flatMap(o => IndexCodec.decode(o._1).toOption.get.entries))
 
   test("encrypted datasets are sent raw, others in the given mode, and datasets without the snapshot are skipped") {
     for

@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
 import cats.syntax.all.*
 import dev.capslock.z3s.age.X25519Identity
-import dev.capslock.z3s.codec.Cbor
+import dev.capslock.z3s.codec.index.IndexCodec
 import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
 import scodec.bits.ByteVector
 
@@ -37,7 +37,7 @@ class OpsSuite extends IOSpec:
     RestoreOptions(snapshot, Some(target), force = false, ids)
 
   def loadIndex(store: InMemoryStore): IO[Index] =
-    store.getWithEtag("backups/tank/data/.z3s-index.cbor").map(o => Cbor.decodeIndex(o.get._1).toOption.get)
+    store.getWithEtag("backups/tank/data/.z3s-index.cbor").map(o => IndexCodec.decode(o.get._1).toOption.get)
 
   /** (スナップショット名, 親の名前, raw)の組から、元のsendが出力したストリームを作る */
   def sentStreams(e: Env, sends: List[(String, Option[String], Boolean)]): List[List[Byte]] =

@@ -3,7 +3,8 @@ package dev.capslock.z3s
 import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
 import dev.capslock.z3s.age.X25519Identity
-import dev.capslock.z3s.codec.Cbor
+import dev.capslock.z3s.codec.header.HeaderCodec
+import dev.capslock.z3s.codec.index.IndexCodec
 import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
 import java.nio.file.{Files, Path}
 import scala.concurrent.duration.Duration
@@ -52,7 +53,7 @@ class ResumeSuite extends IOSpec:
         _ <- backup(e, mode)
         resent <- e.store.uploadPartCalls.get
         aborted <- e.store.aborted.get
-        index <- e.store.getWithEtag("backups/tank/data/.z3s-index.cbor").map(o => Cbor.decodeIndex(o.value._1))
+        index <- e.store.getWithEtag("backups/tank/data/.z3s-index.cbor").map(o => IndexCodec.decode(o.value._1))
         left <- stateFiles(e.dir)
         _ <- e.ops.restore(RestoreOptions("daily-1", Some("pool/r"), force = false, None))
         received <- e.zfs.received.get
@@ -63,7 +64,7 @@ class ResumeSuite extends IOSpec:
         resent should === (List(3))
         aborted should === (Nil)
         // 再開したバックアップは、中断前のヘッダ(createdAtを含む)をそのまま使う
-        Cbor.encodeHeader(index.value.entries.head.header).toSeq should === (saved.value.header.toSeq)
+        HeaderCodec.encode(index.value.entries.head.header).toSeq should === (saved.value.header.toSeq)
         left should === (Nil)
         received.map(_._2.toList) should === (List(e.zfs.streamFor(snapshot, None, mode == raw).toList))
         // 送り直さなかったパートのMD5も、中断前の記録から一覧に入る
@@ -128,7 +129,7 @@ class ResumeSuite extends IOSpec:
       saved <- e.states.load("bucket", objectKey)
       _ <- backup(e, plain)
       aborted <- e.store.aborted.get
-      index <- e.store.getWithEtag("backups/tank/data/.z3s-index.cbor").map(o => Cbor.decodeIndex(o.value._1))
+      index <- e.store.getWithEtag("backups/tank/data/.z3s-index.cbor").map(o => IndexCodec.decode(o.value._1))
     yield
       aborted should === (List(saved.value.uploadId))
       index.value.entries.map(_.header.mode) should === (List(plain))
