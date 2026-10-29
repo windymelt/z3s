@@ -55,6 +55,7 @@ z3s restore daily-2026-10-23 --bucket my-backups --dataset tank/data --target ta
 
 z3s status --bucket my-backups --dataset tank/data [--refresh] [--json]
 z3s reindex --bucket my-backups --dataset tank/data
+z3s verify --bucket my-backups --dataset tank/data [--snapshot NAME]
 ```
 
 - Without `--snapshot`, `backup` sends the latest local snapshot matching `--snapshot-prefix`. For an incremental backup, z3s walks back through local snapshots in createtxg order, picks the latest one that exists on S3 with the same guid as the base, and sends each consecutive pair from the base to the target as a separate object.
@@ -67,6 +68,15 @@ z3s reindex --bucket my-backups --dataset tank/data
 Progress is printed to standard error. `backup` counts the bytes that `zfs send` has written against the estimate from `zfs send -nvP`, before compression and encryption. `restore` counts the bytes downloaded from S3 against the object size. `bar` rewrites a single line, and `log` prints one line at every 10% step or every 60 seconds. `auto` uses `bar` when the console is a terminal and `log` otherwise. If the stream grows beyond the estimate, the percentage stops at 99.9% and the final line shows the actual size.
 
 Exit codes: 0 (success), 1 (runtime error), 2 (usage error), 3 (aborted by a health check).
+
+## Verifying backups
+
+`verify` reads the backup objects in the index and checks them against the ETags on S3. It streams the objects and writes nothing to disk. Without `--snapshot` it checks every backup of the dataset, and `--recursive` (`-r`) also checks the descendant datasets.
+
+- By default, `verify` reads each object to the end, computes the MD5 of each part, and compares MD5(concatenated part MD5s)-(number of parts) with the ETag. Every byte is downloaded, so the transfer and the time grow with the size of the backups. When the part MD5 list (see [Object format](#object-format)) matches the ETag, a mismatch is reported with the numbers of the damaged parts.
+- An object whose ETag is not of the form `<MD5>-<number of parts>`, or whose content matches the part MD5 list but not the ETag, is reported as unverifiable and is not counted as a failure. On Amazon S3, objects encrypted with SSE-KMS or SSE-C have such ETags.
+- Without the part MD5 list, a computed ETag that differs from the one on S3 is reported as a mismatch. This means the object is damaged, or the storage does not compute ETags from MD5s.
+- If any object is damaged, mismatched, or listed in the index but missing on S3, `verify` lists them at the end and exits with 1.
 
 ## Resuming an interrupted backup
 

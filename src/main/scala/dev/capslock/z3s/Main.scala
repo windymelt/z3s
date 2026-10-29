@@ -4,7 +4,7 @@ import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import cats.effect.{ExitCode, IO, IOApp}
 import cats.syntax.all.*
 import com.monovore.decline.*
-import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions}
+import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions, VerifyOptions}
 import java.net.URI
 import java.nio.file.{Files, Path}
 import dev.capslock.z3s.age.{X25519Identity, X25519Recipient}
@@ -16,6 +16,7 @@ enum Cmd:
   case Restore(snapshot: String, target: Option[String], force: Boolean, identity: Option[Path], recursive: Boolean)
   case Status(refresh: Boolean, json: Boolean, recursive: Boolean)
   case Reindex
+  case Verify(opts: VerifyOptions)
 
 object Cli:
   private def withEnv[A: Argument](long: String, env: String, help: String): Opts[A] =
@@ -114,6 +115,12 @@ object Cli:
       recursiveFlag
     ).mapN(Cmd.Status.apply)
 
+  val verify: Opts[Cmd] =
+    (
+      Opts.option[String]("snapshot", "Snapshot to verify (the part after @). Defaults to every backup.").orNone,
+      recursiveFlag
+    ).mapN((snapshot, recursive) => Cmd.Verify(VerifyOptions(snapshot, recursive)))
+
   private def sub(name: String, help: String, opts: Opts[Cmd]): Opts[(Common, Connection, Cmd)] =
     Opts.subcommand(name, help)((common, connection, opts).tupled)
 
@@ -123,6 +130,7 @@ object Cli:
         .orElse(sub("restore", "Receive a snapshot from S3.", restore))
         .orElse(sub("status", "Show backups recorded in the index.", status))
         .orElse(sub("reindex", "Rebuild the index from object headers.", Opts(Cmd.Reindex)))
+        .orElse(sub("verify", "Check backups against the ETags on S3.", verify))
     )
 
 object Main extends IOApp:
@@ -144,6 +152,7 @@ object Main extends IOApp:
             ops.restore(RestoreOptions(snapshot, target, force, ids, recursive))
           case Cmd.Status(refresh, json, recursive) => ops.status(refresh, json, recursive)
           case Cmd.Reindex => ops.reindex.flatMap(i => IO.println(s"indexed ${i.entries.size} object(s)"))
+          case Cmd.Verify(opts) => ops.verify(opts)
       }
     }
 

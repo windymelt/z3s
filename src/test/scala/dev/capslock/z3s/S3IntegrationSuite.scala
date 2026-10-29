@@ -2,7 +2,7 @@ package dev.capslock.z3s
 
 import cats.effect.{IO, Ref, Resource}
 import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
-import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions}
+import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions, VerifyOptions}
 import fs2.{Chunk, Stream}
 import java.net.URI
 import java.nio.file.Files
@@ -218,6 +218,8 @@ class S3IntegrationSuite extends IOSpec:
         got <- zfs.received.get
         digests <- store.getWithEtag("p/tank/data/.z3s-parts/a.cbor")
         head <- store.head("p/tank/data@a")
+        // 読んだ内容から計算したETagが、サーバのETagと一致する
+        _ <- ops.verify(VerifyOptions(None))
       yield
         index.entries.map(_.key) should === (List("p/tank/data@a", "p/tank/data@b"))
         // 保存したパートのMD5一覧から、サーバが返すETagと同じ値を計算できる
