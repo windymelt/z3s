@@ -36,7 +36,8 @@ class ZfsSuite extends IOSpec:
       Right(Map("compression" -> PropertyValue("zstd", "local"), "user:note" -> PropertyValue("a\tb", "received")))
     )
     ZfsCommands.parseProperties("") should === (Right(Map.empty[String, PropertyValue]))
-    // 値に改行があると行が分かれ、sourceを読めない。黙って誤った値を記録せずに失敗させる
+    // 値に改行があると、1つのプロパティが2行に分かれて出力され、どちらの行も「名前、値、source」の形にならない。
+    // 改行より前だけを値として記録すると、ヘッダの値が実際と違ってしまうため、パースをエラーにする
     ZfsCommands.parseProperties("user:note\tline1\nline2\tlocal\n").isLeft should === (true)
   }
 
