@@ -1,11 +1,12 @@
 package dev.capslock.z3s
 
 import cats.effect.IO
-import fs2.{Chunk, Pull, Stream}
+import fs2.{ Chunk, Pull, Stream }
 import fs2.interop.scodec.StreamDecoder
 import scodec.Codec
 import scodec.bits.*
 import scodec.codecs.*
+
 
 final case class Frame(version: Int, header: ByteVector)
 
@@ -34,21 +35,20 @@ object Frame:
 
   /** 先頭のフレームをデコードし、フレームと残りのpayloadを`f`に渡す */
   def split[O](in: Stream[IO, Byte])(f: (Frame, Stream[IO, Byte]) => Stream[IO, O]): Stream[IO, O] =
-    val decoder: StreamDecoder[Either[Frame, BitVector]] =
-      StreamDecoder.once(codec).flatMap { frame =>
-        StreamDecoder.emit(Left(frame)) ++ StreamDecoder.many(scodec.codecs.bits).map(Right(_))
-      }
+    val decoder: StreamDecoder[Either[Frame, BitVector]] = StreamDecoder.once(
+      codec
+    ).flatMap: frame =>
+      StreamDecoder.emit(Left(frame)) ++ StreamDecoder.many(scodec.codecs.bits).map(Right(_))
     decoder
       .decode[IO](in.chunks.map(_.toByteVector.bits))
       .pull
       .uncons1
-      .flatMap {
+      .flatMap:
         case Some((Left(frame), tl)) =>
-          val payload = tl.flatMap {
+          val payload = tl.flatMap:
             case Right(b) => Stream.chunk(Chunk.byteVector(b.bytes))
             case Left(_)  => Stream.raiseError[IO](Z3SError.Runtime("unexpected second frame"))
-          }
           f(frame, payload).pull.echo
         case _ => Pull.raiseError[IO](Z3SError.Runtime("object is too short to contain a frame"))
-      }
       .stream
+end Frame

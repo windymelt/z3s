@@ -2,11 +2,12 @@ package dev.capslock.z3s.age
 
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
-import java.security.{GeneralSecurityException, KeyFactory, MessageDigest}
-import java.security.spec.{NamedParameterSpec, XECPrivateKeySpec, XECPublicKeySpec}
+import java.security.{ GeneralSecurityException, KeyFactory, MessageDigest }
+import java.security.spec.{ NamedParameterSpec, XECPrivateKeySpec, XECPublicKeySpec }
 import java.util.Base64
-import javax.crypto.{Cipher, KeyAgreement, Mac}
-import javax.crypto.spec.{IvParameterSpec, SecretKeySpec}
+import javax.crypto.{ Cipher, KeyAgreement, Mac }
+import javax.crypto.spec.{ IvParameterSpec, SecretKeySpec }
+
 
 /** ageが使う暗号プリミティブ。JCAにないものはここで実装する */
 private[age] object Primitives:
@@ -30,7 +31,9 @@ private[age] object Primitives:
         if shared.forall(_ == 0) then Left("X25519 shared secret is all zero") else Right(shared)
       catch
         // JCAは低位数の点をInvalidKeyException / IllegalStateExceptionで拒否する
-        case e: (GeneralSecurityException | IllegalStateException) => Left(s"X25519 failed: ${e.getMessage}")
+        case e: (GeneralSecurityException | IllegalStateException) => Left(
+          s"X25519 failed: ${e.getMessage}"
+        )
 
   // u座標はリトルエンディアン。最上位ビットを捨て、非正規な値はmod pで扱う（RFC 7748 5章）
   private def decodeU(u: Array[Byte]): BigInteger =
@@ -50,7 +53,12 @@ private[age] object Primitives:
     hmacSha256(prk, info.getBytes(StandardCharsets.US_ASCII) :+ 1.toByte)
 
   // JCAのCipherは同じkey+nonceでの再initを拒否するため、呼び出しごとに作る
-  private def chacha(mode: Int, key: Array[Byte], nonce: Array[Byte], data: Array[Byte]): Array[Byte] =
+  private def chacha(
+      mode: Int,
+      key: Array[Byte],
+      nonce: Array[Byte],
+      data: Array[Byte],
+  ): Array[Byte] =
     val cipher = Cipher.getInstance("ChaCha20-Poly1305")
     cipher.init(mode, SecretKeySpec(key, "ChaCha20"), IvParameterSpec(nonce))
     cipher.doFinal(data)
@@ -65,7 +73,8 @@ private[age] object Primitives:
 
   def constantTimeEquals(a: Array[Byte], b: Array[Byte]): Boolean = MessageDigest.isEqual(a, b)
 
-  def base64Encode(bytes: Array[Byte]): String = Base64.getEncoder.withoutPadding.encodeToString(bytes)
+  def base64Encode(bytes: Array[Byte]): String =
+    Base64.getEncoder.withoutPadding.encodeToString(bytes)
 
   /** パディングなしの標準base64を厳密に復号する。'='や未使用ビットが0でない非正規な表現は拒否する */
   def base64Decode(s: String): Either[String, Array[Byte]] =
@@ -76,3 +85,4 @@ private[age] object Primitives:
         val bytes = Base64.getDecoder.decode(s)
         if base64Encode(bytes) == s then Right(bytes) else Left("non-canonical base64")
       catch case _: IllegalArgumentException => Left("invalid base64")
+end Primitives

@@ -1,11 +1,12 @@
 package dev.capslock.z3s
 
-import cats.effect.{IO, Ref, Resource}
+import cats.effect.{ IO, Ref, Resource }
 import cats.syntax.all.*
-import java.io.{BufferedInputStream, ByteArrayOutputStream}
-import java.net.{ServerSocket, Socket, URI}
+import java.io.{ BufferedInputStream, ByteArrayOutputStream }
+import java.net.{ ServerSocket, Socket, URI }
 import software.amazon.awssdk.core.async.AsyncRequestBody
 import software.amazon.awssdk.services.s3.model.UploadPartRequest
+
 
 /** クライアントがUploadPartにExpect: 100-continueを付けないことを確かめる */
 class ExpectContinueSuite extends IOSpec:
@@ -28,15 +29,17 @@ class ExpectContinueSuite extends IOSpec:
         if headers.contains("expect: 100-continue") then
           out.write("HTTP/1.1 100 Continue\r\n\r\n".getBytes)
           out.flush()
-        val length = headers.collectFirst { case h if h.startsWith("content-length:") => h.drop(15).trim.toLong }
+        val length = headers.collectFirst:
+          case h if h.startsWith("content-length:") => h.drop(15).trim.toLong
         in.skipNBytes(length.getOrElse(0L))
         out.write("HTTP/1.1 200 OK\r\nETag: \"abc\"\r\nContent-Length: 0\r\n\r\n".getBytes)
         out.flush()
     catch case _: Exception => socket.close()
+  end handle
 
   private def server(received: Ref[IO, List[List[String]]]): Resource[IO, ServerSocket] =
-    Resource.fromAutoCloseable(IO(ServerSocket(0))).flatTap { s =>
-      Resource.eval(IO {
+    Resource.fromAutoCloseable(IO(ServerSocket(0))).flatTap: s =>
+      Resource.eval(IO:
         val t = Thread(() =>
           try
             while true do
@@ -46,25 +49,30 @@ class ExpectContinueSuite extends IOSpec:
         )
         t.setDaemon(true)
         t.start()
-      })
-    }
+      )
 
-  test("UploadPart is sent without Expect: 100-continue") {
+  test("UploadPart is sent without Expect: 100-continue"):
     System.setProperty("aws.accessKeyId", "test")
     System.setProperty("aws.secretAccessKey", "test")
     for
       received <- Ref.of[IO, List[List[String]]](Nil)
       etag <- server(received)
-        .flatMap(s => S3ObjectStore.client(Some("us-east-1"), Some(URI.create(s"http://127.0.0.1:${s.getLocalPort}"))))
+        .flatMap(s =>
+          S3ObjectStore.client(
+            Some("us-east-1"),
+            Some(URI.create(s"http://127.0.0.1:${s.getLocalPort}")),
+          )
+        )
         .use { client =>
-          val req = UploadPartRequest.builder().bucket("b").key("k").uploadId("u").partNumber(1).build()
+          val req =
+            UploadPartRequest.builder().bucket("b").key("k").uploadId("u").partNumber(1).build()
           // SDKは1 MiB以上の本文にだけExpectを付けるため、それより大きくする
           val body = AsyncRequestBody.fromBytes(Array.fill[Byte](5 * 1024 * 1024)(1))
           IO.fromCompletableFuture(IO(client.uploadPart(req, body))).map(_.eTag())
         }
       requests <- received.get
     yield
-      etag should === ("\"abc\"")
+      etag should ===("\"abc\"")
       requests should have size 1
       forAll(requests.head)(_ should not startWith "expect:")
-  }
+end ExpectContinueSuite
