@@ -22,6 +22,25 @@ class ZfsSuite extends IOSpec:
       ProcessZfs(p.toString).recv("pool/restored", force, input).attempt.map(_.left.value.getMessage)
     }
 
+  test("zfs version output is parsed into userland and kernel versions") {
+    ZfsCommands.parseVersion("zfs-2.2.6-1\nzfs-kmod-2.2.6-1\n") should === (
+      Right(ZfsVersion("zfs-2.2.6-1", Some("zfs-kmod-2.2.6-1")))
+    )
+    // kernel moduleが読み込まれていなければ、userlandの行だけになる
+    ZfsCommands.parseVersion("zfs-2.2.6-1\n") should === (Right(ZfsVersion("zfs-2.2.6-1", None)))
+    ZfsCommands.parseVersion("").isLeft should === (true)
+  }
+
+  test("zfs get output is parsed, keeping tabs in values") {
+    ZfsCommands.parseProperties("compression\tzstd\tlocal\nuser:note\ta\tb\treceived\n") should === (
+      Right(Map("compression" -> PropertyValue("zstd", "local"), "user:note" -> PropertyValue("a\tb", "received")))
+    )
+    ZfsCommands.parseProperties("") should === (Right(Map.empty[String, PropertyValue]))
+    // 値に改行があると、1つのプロパティが2行に分かれて出力され、どちらの行も「名前、値、source」の形にならない。
+    // 改行より前だけを値として記録すると、ヘッダの値が実際と違ってしまうため、パースをエラーにする
+    ZfsCommands.parseProperties("user:note\tline1\nline2\tlocal\n").isLeft should === (true)
+  }
+
   for (name, body) <- List("after reading the stream" -> "cat >/dev/null; exit 1", "without reading" -> "exit 1") do
     test(s"zfs recv failure shows hints ($name)") {
       recvError(body, force = false).map { msg =>

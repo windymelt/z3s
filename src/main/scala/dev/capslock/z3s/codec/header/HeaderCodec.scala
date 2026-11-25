@@ -1,9 +1,9 @@
 package dev.capslock.z3s.codec.header
 
 import cats.data.NonEmptyList
-import dev.capslock.z3s.{Compression, Encryption, Header, ParentRef, SendMode}
+import dev.capslock.z3s.{Compression, Encryption, Header, ParentRef, PropertyValue, SendMode, ZfsVersion}
 import dev.capslock.z3s.codec.BorerSupport.{fail, readArray, readMap, readU64, required, writeU64}
-import io.bullet.borer.{Cbor, Decoder, Encoder}
+import io.bullet.borer.{Cbor, Decoder, Encoder, Reader, Writer}
 
 /** バックアップのオブジェクトのヘッダのCBOR表現。mapは文字列キーとし、デコード時は未知のキーを読み飛ばす */
 object HeaderCodec:
@@ -103,8 +103,49 @@ object HeaderCodec:
     ParentRef(required("name", name), required("guid", guid))
   }
 
+  given Encoder[ZfsVersion] = Encoder { (w, v) =>
+    w.writeMapHeader(1 + v.kernel.size).writeString("userland").writeString(v.userland)
+    v.kernel.foreach(k => w.writeString("kernel").writeString(k))
+    w
+  }
+
+  given Decoder[ZfsVersion] = Decoder { r =>
+    var userland: Option[String] = scala.None
+    var kernel: Option[String] = scala.None
+    readMap(r) {
+      case "userland" => r => userland = Some(r.readString())
+      case "kernel"   => r => kernel = Some(r.readString())
+    }
+    ZfsVersion(required("userland", userland), kernel)
+  }
+
+  given Encoder[PropertyValue] = Encoder { (w, p) =>
+    w.writeMapHeader(2).writeString("value").writeString(p.value).writeString("source").writeString(p.source)
+  }
+
+  given Decoder[PropertyValue] = Decoder { r =>
+    var value: Option[String] = scala.None
+    var source: Option[String] = scala.None
+    readMap(r) {
+      case "value"  => r => value = Some(r.readString())
+      case "source" => r => source = Some(r.readString())
+    }
+    PropertyValue(required("value", value), required("source", source))
+  }
+
+  /** 名前の順に書き、同じプロパティから同じバイト列を作る */
+  private def writeProperties(w: Writer, ps: Map[String, PropertyValue]): Writer =
+    w.writeMapHeader(ps.size)
+    ps.toList.sortBy(_._1).foreach((k, v) => w.writeString(k).write(v))
+    w
+
+  private def readProperties(r: Reader): Map[String, PropertyValue] =
+    val b = Map.newBuilder[String, PropertyValue]
+    readMap(r) { case k => r => b += k -> r.read[PropertyValue]() }
+    b.result()
+
   given Encoder[Header] = Encoder { (w, h) =>
-    w.writeMapHeader(7 + h.parent.size + h.partSize.size)
+    w.writeMapHeader(7 + h.parent.size + h.partSize.size + h.zfsVersion.size + h.properties.size + h.snapshotProperties.size)
     w.writeString("snapshot").writeString(h.snapshot)
     w.writeString("guid"); writeU64(w, h.guid)
     w.writeString("createtxg"); writeU64(w, h.createtxg)
@@ -114,6 +155,9 @@ object HeaderCodec:
     w.writeString("createdAt").writeString(h.createdAt)
     w.writeString("toolVersion").writeString(h.toolVersion)
     h.partSize.foreach(n => writeU64(w.writeString("partSize"), n))
+    h.zfsVersion.foreach(v => w.writeString("zfsVersion").write(v))
+    h.properties.foreach(ps => writeProperties(w.writeString("properties"), ps))
+    h.snapshotProperties.foreach(ps => writeProperties(w.writeString("snapshotProperties"), ps))
     w
   }
 
@@ -127,6 +171,9 @@ object HeaderCodec:
     var createdAt: Option[String] = scala.None
     var toolVersion: Option[String] = scala.None
     var partSize: Option[Long] = scala.None
+    var zfsVersion: Option[ZfsVersion] = scala.None
+    var properties: Option[Map[String, PropertyValue]] = scala.None
+    var snapshotProperties: Option[Map[String, PropertyValue]] = scala.None
     readMap(r) {
       case "snapshot"      => r => snapshot = Some(r.readString())
       case "guid"          => r => guid = Some(readU64(r))
@@ -137,6 +184,9 @@ object HeaderCodec:
       case "createdAt"     => r => createdAt = Some(r.readString())
       case "toolVersion"   => r => toolVersion = Some(r.readString())
       case "partSize"      => r => partSize = Some(readU64(r))
+      case "zfsVersion"    => r => zfsVersion = Some(r.read[ZfsVersion]())
+      case "properties"    => r => properties = Some(readProperties(r))
+      case "snapshotProperties" => r => snapshotProperties = Some(readProperties(r))
     }
     Header(
       required("snapshot", snapshot),
@@ -147,7 +197,10 @@ object HeaderCodec:
       required("estimatedSize", estimatedSize),
       required("createdAt", createdAt),
       required("toolVersion", toolVersion),
-      partSize
+      partSize,
+      zfsVersion,
+      properties,
+      snapshotProperties
     )
   }
 

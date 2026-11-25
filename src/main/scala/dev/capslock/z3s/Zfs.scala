@@ -17,6 +17,10 @@ trait Zfs:
   /** 終了コードが0以外ならストリームを失敗させる */
   def send(snapshot: String, parent: Option[String], raw: Boolean): Stream[IO, Byte]
   def recv(target: String, force: Boolean, input: Stream[IO, Byte]): IO[Unit]
+  /** `zfs version`の出力。OpenZFS 0.8より前にはこのサブコマンドがない */
+  def version: IO[ZfsVersion]
+  /** datasetかスナップショットの、sourceがlocalかreceivedのプロパティ。親から継承したものと読み取り専用のものは含まない */
+  def properties(name: String): IO[Map[String, PropertyValue]]
 
 object ZfsCommands:
   def list(dataset: String): List[String] =
@@ -33,6 +37,28 @@ object ZfsCommands:
 
   def recv(target: String, force: Boolean): List[String] =
     ("recv" :: (if force then List("-F") else Nil)) :+ target
+
+  val version: List[String] = List("version")
+
+  def properties(name: String): List[String] =
+    List("get", "-H", "-p", "-o", "property,value,source", "-s", "local,received", "all", name)
+
+  /** 1行目がuserland、`zfs-kmod-`で始まる行がkernel moduleのバージョン */
+  def parseVersion(out: String): Either[String, ZfsVersion] =
+    val lines = out.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+    val (kernel, userland) = lines.partition(_.startsWith("zfs-kmod-"))
+    userland.headOption
+      .map(ZfsVersion(_, kernel.headOption))
+      .toRight(s"cannot parse zfs version output: ${out.take(500)}")
+
+  /** 値にタブが含まれても読めるように、先頭を名前、末尾をsourceとし、その間を値とする */
+  def parseProperties(out: String): Either[String, Map[String, PropertyValue]] =
+    out.linesIterator.filter(_.nonEmpty).toList.traverse { line =>
+      line.split("\t", -1).toList match
+        case name :: rest if rest.size >= 2 && Set("local", "received").contains(rest.last) =>
+          Right(name -> PropertyValue(rest.init.mkString("\t"), rest.last))
+        case _ => Left(s"cannot parse zfs get output: $line")
+    }.map(_.toMap)
 
   def show(args: List[String]): String = ("zfs" :: args).mkString(" ")
 
@@ -114,6 +140,20 @@ final class ProcessZfs(command: String = "zfs") extends Zfs:
     run(args, mergeStderr = true).flatMap {
       case (0, out, _) => ZfsCommands.parseEstimate(out).leftMap(Z3SError.Runtime(_)).liftTo[IO]
       case (code, out, _) => IO.raiseError(failed(args, code, out))
+    }
+
+  def version: IO[ZfsVersion] =
+    val args = ZfsCommands.version
+    run(args).flatMap {
+      case (0, out, _)    => ZfsCommands.parseVersion(out).leftMap(Z3SError.Runtime(_)).liftTo[IO]
+      case (code, _, err) => IO.raiseError(failed(args, code, err))
+    }
+
+  def properties(name: String): IO[Map[String, PropertyValue]] =
+    val args = ZfsCommands.properties(name)
+    run(args).flatMap {
+      case (0, out, _)    => ZfsCommands.parseProperties(out).leftMap(Z3SError.Runtime(_)).liftTo[IO]
+      case (code, _, err) => IO.raiseError(failed(args, code, err))
     }
 
   def send(snapshot: String, parent: Option[String], raw: Boolean): Stream[IO, Byte] =

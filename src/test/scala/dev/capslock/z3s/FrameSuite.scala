@@ -36,6 +36,21 @@ class FrameSuite extends IOSpec:
     forAll(headers)(h => HeaderCodec.decode(HeaderCodec.encode(h)) should === (Right(h))): Assertion
   }
 
+  test("header round trip with the ZFS version and properties") {
+    val properties = Map(
+      "compression" -> PropertyValue("zstd", "local"),
+      "user:note" -> PropertyValue("a\tb", "received"),
+      "mountpoint" -> PropertyValue("/srv/data", "local")
+    )
+    val headers =
+      for
+        version <- List(None, Some(ZfsVersion("zfs-2.2.6-1", None)), Some(ZfsVersion("zfs-2.2.6-1", Some("zfs-kmod-2.2.6-1"))))
+        props <- List(None, Some(Map.empty[String, PropertyValue]), Some(properties))
+        snapProps <- List(None, Some(Map("user:tag" -> PropertyValue("weekly", "local"))))
+      yield header.copy(zfsVersion = version, properties = props, snapshotProperties = snapProps)
+    forAll(headers)(h => HeaderCodec.decode(HeaderCodec.encode(h)) should === (Right(h))): Assertion
+  }
+
   test("guid is encoded as CBOR uint64") {
     val bytes = ByteVector(HeaderCodec.encode(header.copy(parent = None)))
     // "guid"の直後がmajor type 0, 8バイト長(0x1b)の2^64 - 1234567890123

@@ -72,6 +72,12 @@ final case class Snapshot(name: String, guid: Long, createtxg: Long):
 
 final case class ParentRef(name: String, guid: Long)
 
+/** `zfs version`の出力。kernelはkernel moduleのバージョンで、読み込まれていなければ出力にない */
+final case class ZfsVersion(userland: String, kernel: Option[String])
+
+/** datasetのプロパティの値と、`zfs get`のsource(`local`か`received`) */
+final case class PropertyValue(value: String, source: String)
+
 final case class Header(
     snapshot: String,
     guid: Long,
@@ -82,7 +88,15 @@ final case class Header(
     createdAt: String,
     toolVersion: String,
     /** multipart uploadのパートの大きさ。古いバージョンが書いたヘッダにはない */
-    partSize: Option[Long] = None
+    partSize: Option[Long] = None,
+    /** 送信したホストのZFSのバージョン。古いバージョンが書いたヘッダと、取得できなかった場合はない */
+    zfsVersion: Option[ZfsVersion] = None,
+    /** 送信時のdatasetのプロパティのうち、sourceがlocalかreceivedのもの。古いバージョンが書いたヘッダにはない */
+    properties: Option[Map[String, PropertyValue]] = None,
+    /** 送信時のスナップショットのプロパティのうち、sourceがlocalかreceivedのもの。実質的にはユーザープロパティだけになる。
+      * 古いバージョンが書いたヘッダにはない
+      */
+    snapshotProperties: Option[Map[String, PropertyValue]] = None
 ):
   def isFull: Boolean = parent.isEmpty
 

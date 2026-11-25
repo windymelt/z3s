@@ -37,6 +37,8 @@ final case class BackupOptions(
 private[ops] final class Backup(ctx: OpsContext):
   import ctx.{common, err, now, out, progress, store, zfs}
 
+  private type HostInfo = (zfsVersion: Option[ZfsVersion], properties: Map[String, PropertyValue])
+
   def backup(opts: BackupOptions): IO[Unit] =
     val resumeNotice = opts.stateDir match
       case Some(dir) if opts.isResumable => out(s"resume state directory: $dir")
@@ -100,16 +102,38 @@ private[ops] final class Backup(ctx: OpsContext):
       _ <- plan match
         case BackupPlan.UpToDate(s) => out(s"${s.name} is already backed up")
         case BackupPlan.Steps(steps) =>
-          out(s"plan: ${steps.size} object(s) in ${opts.mode.kind.label} mode") *>
-            steps.zipWithIndex.traverse_((s, i) => sendOne(s, opts, s"[${i + 1}/${steps.size}]"))
+          for
+            _ <- out(s"plan: ${steps.size} object(s) in ${opts.mode.kind.label} mode")
+            host <- hostInfo
+            _ <- steps.zipWithIndex.traverse_((s, i) => sendOne(s, opts, host, s"[${i + 1}/${steps.size}]"))
+          yield ()
     yield ()
 
-  private def sendOne(step: SendStep, opts: BackupOptions, position: String): IO[Unit] =
+  /** ヘッダに記録するZFSのバージョンとdatasetのプロパティ。プロパティはsnapshotではなくdatasetの今の値。
+    * ストリームには含めない(`zfs send -p`は使わない)ので、restoreでは自動で設定されない。
+    * バージョンを取得できない古いZFSでは、警告を出してバージョンなしで送る
+    */
+  private def hostInfo: IO[HostInfo] =
+    for
+      version <- zfs.version.attempt.flatMap {
+        case Right(v) => IO.pure(Some(v))
+        case Left(e)  => err(s"warning: cannot get the ZFS version; not recording it: ${e.getMessage}").as(None)
+      }
+      properties <- zfs.properties(common.dataset)
+    yield (zfsVersion = version, properties = properties)
+
+  private def sendOne(
+      step: SendStep,
+      opts: BackupOptions,
+      host: HostInfo,
+      position: String
+  ): IO[Unit] =
     val raw = opts.mode == SendMode.Raw
     val parentName = step.parent.map(_.name)
     val key = common.objectKey(step.child.name)
     for
       estimated <- zfs.estimateSize(step.child.name, parentName, raw)
+      snapshotProperties <- zfs.properties(step.child.name)
       partSize = Planner.partSize(estimated)
       createdAt <- now.map(DateTimeFormatter.ISO_INSTANT.format)
       header = Header(
@@ -121,8 +145,21 @@ private[ops] final class Backup(ctx: OpsContext):
         estimatedSize = estimated,
         createdAt = createdAt,
         toolVersion = BuildInfo.version,
-        partSize = Some(partSize)
+        partSize = Some(partSize),
+        zfsVersion = host.zfsVersion,
+        properties = Some(host.properties),
+        snapshotProperties = Some(snapshotProperties)
       )
+      headerLength = HeaderCodec.encode(header).length
+      _ <- IO
+        .raiseError(
+          Z3SError.Runtime(
+            s"the header of ${step.child.name} is $headerLength bytes, over the limit of ${Frame.MaxHeaderLength}; " +
+              s"it records ${host.properties.size} properties of ${common.dataset} " +
+              s"and ${snapshotProperties.size} properties of the snapshot"
+          )
+        )
+        .whenA(headerLength > Frame.MaxHeaderLength)
       _ <- out(
         s"${parentName.fold("full")(p => s"incremental from $p")} -> ${step.child.name}: " +
           s"estimated $estimated bytes, part size $partSize, key $key"
