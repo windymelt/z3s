@@ -120,10 +120,12 @@ class VerifySuite extends IOSpec:
       _ <- update(e, objectKey)(_.copy(etag = "\"0123456789abcdef0123456789abcdef-3\""))
       formed <- verify(e)
       _ <- update(e, objectKey)(_.copy(etag = "\"opaque\""))
-      opaque <- verify(e)
+      // XXX: 変数名をopaqueにすると、scruff 0.4.3が`opaque should ...`をopaque typeの書き始めと読んで構文エラーにする。
+      // 直ったらopaqueに戻す https://github.com/eed3si9n/scruff/issues/67
+      unformed <- verify(e)
     yield
       formed should === (Right(()))
-      opaque should === (Right(()))
+      unformed should === (Right(()))
   }
 
   test("an object in the index but not on S3 is reported as missing") {
