@@ -20,7 +20,7 @@ final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectS
   private def call[A](f: => CompletableFuture[A]): IO[A] = IO.fromCompletableFuture(
     IO.blocking(f)
   ).adaptError:
-    case e: CompletionException if e.getCause != null => e.getCause
+    case e: CompletionException if Option(e.getCause).isDefined => e.getCause
 
   private def status(e: Throwable): Option[Int] =
     e match
@@ -165,7 +165,7 @@ final class S3ObjectStore(client: S3AsyncClient, bucket: String) extends ObjectS
     call(client.completeMultipartUpload(req)).map(_.eTag()).adaptError:
       case e if isPreconditionFailure(e) => Z3SError.Unresumable(
         s"object already exists: s3://$bucket/$key",
-        e,
+        Some(e),
       )
 
   def abortMultipartUpload(key: String, uploadId: String): IO[Unit] =

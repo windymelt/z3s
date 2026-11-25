@@ -1,15 +1,19 @@
 package dev.capslock.z3s
 
-/** 終了コードを決めるエラー */
-sealed abstract class Z3SError(message: String, val exitCode: Int, cause: Throwable = null)
-    extends Exception(message, cause)
+/** 終了コードを決めるエラー。原因のないエラーはcauseをNoneにする */
+sealed abstract class Z3SError(message: String, val exitCode: Int, cause: Option[Throwable] = None)
+    extends Exception(message, cause.orNull)
 
 object Z3SError:
   /** 実行時エラー(終了コード1) */
-  final class Runtime(message: String, cause: Throwable = null) extends Z3SError(message, 1, cause)
+  final class Runtime(message: String, cause: Option[Throwable] = None) extends Z3SError(
+    message,
+    1,
+    cause,
+  )
 
   /** 再開しても成功しない実行時エラー(終了コード1)。中断したmultipart uploadを残さない */
-  final class Unresumable(message: String, cause: Throwable = null) extends Z3SError(
+  final class Unresumable(message: String, cause: Option[Throwable] = None) extends Z3SError(
     message,
     1,
     cause,

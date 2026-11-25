@@ -278,7 +278,7 @@ private[ops] final class Backup(ctx: OpsContext):
       _ <- ctx.indexStore.update(_.upsert(entry)).void.adaptError { case e =>
         Z3SError.Runtime(
           s"$key was uploaded, but updating the index failed (${e.getMessage}); run `z3s reindex`",
-          e,
+          Some(e),
         )
       }
     yield ()

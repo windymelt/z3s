@@ -10,7 +10,10 @@ import java.security.SecureRandom
 import Primitives.bytes
 
 
-final class AgeException(message: String, cause: Throwable = null) extends Exception(message, cause)
+final class AgeException(message: String, cause: Option[Throwable] = None) extends Exception(
+  message,
+  cause.orNull,
+)
 
 
 /** age v1形式（https://github.com/C2SP/C2SP/blob/main/age.md）のX25519 recipientによる暗号化・復号 */
