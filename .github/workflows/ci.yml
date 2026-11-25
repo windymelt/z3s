@@ -9,6 +9,17 @@ permissions:
   contents: read
 
 jobs:
+  scruff:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # scruffのバージョンは.scruff.tomlのversionで決まる
+      - uses: eed3si9n/scruff@v0.4.3
+        with:
+          format: true
+          lint: true
+
   test:
     runs-on: ubuntu-24.04
     strategy:
