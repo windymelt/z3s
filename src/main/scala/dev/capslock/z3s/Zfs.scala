@@ -19,8 +19,8 @@ trait Zfs:
   def recv(target: String, force: Boolean, input: Stream[IO, Byte]): IO[Unit]
   /** `zfs version`の出力。OpenZFS 0.8より前にはこのサブコマンドがない */
   def version: IO[ZfsVersion]
-  /** sourceがlocalかreceivedのプロパティ。親から継承したものと読み取り専用のものは含まない */
-  def properties(dataset: String): IO[Map[String, PropertyValue]]
+  /** datasetかスナップショットの、sourceがlocalかreceivedのプロパティ。親から継承したものと読み取り専用のものは含まない */
+  def properties(name: String): IO[Map[String, PropertyValue]]
 
 object ZfsCommands:
   def list(dataset: String): List[String] =
@@ -40,8 +40,8 @@ object ZfsCommands:
 
   val version: List[String] = List("version")
 
-  def properties(dataset: String): List[String] =
-    List("get", "-H", "-p", "-o", "property,value,source", "-s", "local,received", "all", dataset)
+  def properties(name: String): List[String] =
+    List("get", "-H", "-p", "-o", "property,value,source", "-s", "local,received", "all", name)
 
   /** 1行目がuserland、`zfs-kmod-`で始まる行がkernel moduleのバージョン */
   def parseVersion(out: String): Either[String, ZfsVersion] =
@@ -149,8 +149,8 @@ final class ProcessZfs(command: String = "zfs") extends Zfs:
       case (code, _, err) => IO.raiseError(failed(args, code, err))
     }
 
-  def properties(dataset: String): IO[Map[String, PropertyValue]] =
-    val args = ZfsCommands.properties(dataset)
+  def properties(name: String): IO[Map[String, PropertyValue]] =
+    val args = ZfsCommands.properties(name)
     run(args).flatMap {
       case (0, out, _)    => ZfsCommands.parseProperties(out).leftMap(Z3SError.Runtime(_)).liftTo[IO]
       case (code, _, err) => IO.raiseError(failed(args, code, err))

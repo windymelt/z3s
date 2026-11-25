@@ -222,11 +222,12 @@ class OpsSuite extends IOSpec:
     yield inside(r.left.value) { case z: Z3SError => z.exitCode should === (2) }
   }
 
-  test("the header records the ZFS version and the dataset properties") {
+  test("the header records the ZFS version and the dataset and snapshot properties") {
     val props = Map("compression" -> PropertyValue("zstd", "local"), "user:x" -> PropertyValue("1", "received"))
+    val snapProps = Map("user:tag" -> PropertyValue("first", "local"))
     for
       e <- env()
-      _ <- e.zfs.props.set(Map(dataset -> props))
+      _ <- e.zfs.props.set(Map(dataset -> props, s"$dataset@daily-1" -> snapProps))
       _ <- e.ops.backup(backupOpts(SendMode.Raw, full = true, Some("daily-1")))
       _ <- e.zfs.zfsVersion.set(None)
       _ <- e.ops.backup(backupOpts(SendMode.Raw, full = false, Some("daily-2")))
@@ -234,6 +235,7 @@ class OpsSuite extends IOSpec:
       rebuilt <- e.store.objects.update(_ - "backups/tank/data/.z3s-index.cbor") *> e.ops.reindex
     yield
       index.entries.map(_.header.properties) should === (List(Some(props), Some(props)))
+      index.entries.map(_.header.snapshotProperties) should === (List(Some(snapProps), Some(Map.empty)))
       // バージョンを取得できなければ、記録せずにバックアップを続ける
       index.entries.map(_.header.zfsVersion) should === (
         List(Some(ZfsVersion("zfs-2.2.6-1", Some("zfs-kmod-2.2.6-1"))), None)

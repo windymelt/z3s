@@ -145,7 +145,7 @@ object HeaderCodec:
     b.result()
 
   given Encoder[Header] = Encoder { (w, h) =>
-    w.writeMapHeader(7 + h.parent.size + h.partSize.size + h.zfsVersion.size + h.properties.size)
+    w.writeMapHeader(7 + h.parent.size + h.partSize.size + h.zfsVersion.size + h.properties.size + h.snapshotProperties.size)
     w.writeString("snapshot").writeString(h.snapshot)
     w.writeString("guid"); writeU64(w, h.guid)
     w.writeString("createtxg"); writeU64(w, h.createtxg)
@@ -157,6 +157,7 @@ object HeaderCodec:
     h.partSize.foreach(n => writeU64(w.writeString("partSize"), n))
     h.zfsVersion.foreach(v => w.writeString("zfsVersion").write(v))
     h.properties.foreach(ps => writeProperties(w.writeString("properties"), ps))
+    h.snapshotProperties.foreach(ps => writeProperties(w.writeString("snapshotProperties"), ps))
     w
   }
 
@@ -172,6 +173,7 @@ object HeaderCodec:
     var partSize: Option[Long] = scala.None
     var zfsVersion: Option[ZfsVersion] = scala.None
     var properties: Option[Map[String, PropertyValue]] = scala.None
+    var snapshotProperties: Option[Map[String, PropertyValue]] = scala.None
     readMap(r) {
       case "snapshot"      => r => snapshot = Some(r.readString())
       case "guid"          => r => guid = Some(readU64(r))
@@ -184,6 +186,7 @@ object HeaderCodec:
       case "partSize"      => r => partSize = Some(readU64(r))
       case "zfsVersion"    => r => zfsVersion = Some(r.read[ZfsVersion]())
       case "properties"    => r => properties = Some(readProperties(r))
+      case "snapshotProperties" => r => snapshotProperties = Some(readProperties(r))
     }
     Header(
       required("snapshot", snapshot),
@@ -196,7 +199,8 @@ object HeaderCodec:
       required("toolVersion", toolVersion),
       partSize,
       zfsVersion,
-      properties
+      properties,
+      snapshotProperties
     )
   }
 

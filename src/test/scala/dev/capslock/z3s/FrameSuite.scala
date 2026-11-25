@@ -46,7 +46,8 @@ class FrameSuite extends IOSpec:
       for
         version <- List(None, Some(ZfsVersion("zfs-2.2.6-1", None)), Some(ZfsVersion("zfs-2.2.6-1", Some("zfs-kmod-2.2.6-1"))))
         props <- List(None, Some(Map.empty[String, PropertyValue]), Some(properties))
-      yield header.copy(zfsVersion = version, properties = props)
+        snapProps <- List(None, Some(Map("user:tag" -> PropertyValue("weekly", "local"))))
+      yield header.copy(zfsVersion = version, properties = props, snapshotProperties = snapProps)
     forAll(headers)(h => HeaderCodec.decode(HeaderCodec.encode(h)) should === (Right(h))): Assertion
   }
 

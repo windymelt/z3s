@@ -133,6 +133,7 @@ private[ops] final class Backup(ctx: OpsContext):
     val key = common.objectKey(step.child.name)
     for
       estimated <- zfs.estimateSize(step.child.name, parentName, raw)
+      snapshotProperties <- zfs.properties(step.child.name)
       partSize = Planner.partSize(estimated)
       createdAt <- now.map(DateTimeFormatter.ISO_INSTANT.format)
       header = Header(
@@ -146,14 +147,16 @@ private[ops] final class Backup(ctx: OpsContext):
         toolVersion = BuildInfo.version,
         partSize = Some(partSize),
         zfsVersion = host.zfsVersion,
-        properties = Some(host.properties)
+        properties = Some(host.properties),
+        snapshotProperties = Some(snapshotProperties)
       )
       headerLength = HeaderCodec.encode(header).length
       _ <- IO
         .raiseError(
           Z3SError.Runtime(
             s"the header of ${step.child.name} is $headerLength bytes, over the limit of ${Frame.MaxHeaderLength}; " +
-              s"it records ${host.properties.size} properties of ${common.dataset}"
+              s"it records ${host.properties.size} properties of ${common.dataset} " +
+              s"and ${snapshotProperties.size} properties of the snapshot"
           )
         )
         .whenA(headerLength > Frame.MaxHeaderLength)

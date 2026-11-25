@@ -92,7 +92,11 @@ final case class Header(
     /** 送信したホストのZFSのバージョン。古いバージョンが書いたヘッダと、取得できなかった場合はない */
     zfsVersion: Option[ZfsVersion] = None,
     /** 送信時のdatasetのプロパティのうち、sourceがlocalかreceivedのもの。古いバージョンが書いたヘッダにはない */
-    properties: Option[Map[String, PropertyValue]] = None
+    properties: Option[Map[String, PropertyValue]] = None,
+    /** 送信時のスナップショットのプロパティのうち、sourceがlocalかreceivedのもの。実質的にはユーザープロパティだけになる。
+      * 古いバージョンが書いたヘッダにはない
+      */
+    snapshotProperties: Option[Map[String, PropertyValue]] = None
 ):
   def isFull: Boolean = parent.isEmpty
 
