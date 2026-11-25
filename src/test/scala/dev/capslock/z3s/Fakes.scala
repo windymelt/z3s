@@ -20,6 +20,10 @@ final class FakeZfs(
   val failingListSnapshots: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
   /** zfs recvを失敗させる受信先 */
   val failingRecvs: Ref[IO, Set[String]] = Ref.unsafe(Set.empty)
+  /** `zfs version`が返す値。Noneなら失敗させる */
+  val zfsVersion: Ref[IO, Option[ZfsVersion]] = Ref.unsafe(Some(ZfsVersion("zfs-2.2.6-1", Some("zfs-kmod-2.2.6-1"))))
+  /** datasetごとのプロパティ。ないdatasetは空 */
+  val props: Ref[IO, Map[String, Map[String, PropertyValue]]] = Ref.unsafe(Map.empty)
   /** zfs sendを呼んだ(スナップショット, raw)の組 */
   val sends: Ref[IO, List[(String, Boolean)]] = Ref.unsafe(Nil)
 
@@ -51,6 +55,11 @@ final class FakeZfs(
       val dataset = snapshot.takeWhile(_ != '@')
       IO.raiseError(new Exception(s"injected send failure for $dataset")).whenA(failing.contains(dataset))
     }).flatMap(s => Stream.chunk(Chunk.array(streamFor(s, parent, raw))).rechunkRandomly())
+
+  def version: IO[ZfsVersion] =
+    zfsVersion.get.flatMap(_.liftTo[IO](new Exception("injected zfs version failure")))
+
+  def properties(dataset: String): IO[Map[String, PropertyValue]] = props.get.map(_.getOrElse(dataset, Map.empty))
 
   def recv(target: String, force: Boolean, input: Stream[IO, Byte]): IO[Unit] =
     failingRecvs.get.flatMap { failing =>

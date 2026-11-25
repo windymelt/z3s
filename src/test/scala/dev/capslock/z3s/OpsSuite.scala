@@ -222,6 +222,39 @@ class OpsSuite extends IOSpec:
     yield inside(r.left.value) { case z: Z3SError => z.exitCode should === (2) }
   }
 
+  test("the header records the ZFS version and the dataset properties") {
+    val props = Map("compression" -> PropertyValue("zstd", "local"), "user:x" -> PropertyValue("1", "received"))
+    for
+      e <- env()
+      _ <- e.zfs.props.set(Map(dataset -> props))
+      _ <- e.ops.backup(backupOpts(SendMode.Raw, full = true, Some("daily-1")))
+      _ <- e.zfs.zfsVersion.set(None)
+      _ <- e.ops.backup(backupOpts(SendMode.Raw, full = false, Some("daily-2")))
+      index <- loadIndex(e.store)
+      rebuilt <- e.store.objects.update(_ - "backups/tank/data/.z3s-index.cbor") *> e.ops.reindex
+    yield
+      index.entries.map(_.header.properties) should === (List(Some(props), Some(props)))
+      // バージョンを取得できなければ、記録せずにバックアップを続ける
+      index.entries.map(_.header.zfsVersion) should === (
+        List(Some(ZfsVersion("zfs-2.2.6-1", Some("zfs-kmod-2.2.6-1"))), None)
+      )
+      rebuilt.entries.map(_.header) should === (index.entries.map(_.header))
+  }
+
+  test("a header over the size limit aborts the backup before uploading") {
+    val big = (1 to 20).map(i => s"user:p$i" -> PropertyValue("x" * 4000, "local")).toMap
+    for
+      e <- env()
+      _ <- e.zfs.props.set(Map(dataset -> big))
+      r <- e.ops.backup(backupOpts(SendMode.Raw, full = true)).attempt
+      sends <- e.zfs.sends.get
+      objects <- e.store.objects.get
+    yield
+      r.left.value.getMessage should include("over the limit of 65536")
+      sends should === (Nil)
+      objects.keySet.filterNot(_.endsWith(".z3s-index.cbor")) should === (Set.empty[String])
+  }
+
   test("dry run writes nothing") {
     for
       e <- env()
