@@ -23,20 +23,20 @@ lazy val root = project
       "org.scalatest" %% "scalatest" % "3.2.20" % Test,
       "org.typelevel" %% "cats-effect-testing-scalatest" % "1.8.0" % Test,
       "org.typelevel" %% "cats-effect-testkit" % "3.7.1" % Test,
-      "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test
+      "org.scalatestplus" %% "scalacheck-1-19" % "3.2.20.0" % Test,
     ),
-    Compile / sourceGenerators += Def.task {
-      val file = (Compile / sourceManaged).value / "dev" / "capslock" / "z3s" / "BuildInfo.scala"
-      IO.write(
-        file,
-        s"""package dev.capslock.z3s
+    Compile / sourceGenerators += Def.task:
+        val file = (Compile / sourceManaged).value / "dev" / "capslock" / "z3s" / "BuildInfo.scala"
+        IO.write(
+          file,
+          s"""package dev.capslock.z3s
            |
            |object BuildInfo:
            |  val version: String = "${version.value}"
            |""".stripMargin
-      )
-      Seq(file)
-    }.taskValue,
+        )
+        Seq(file)
+      .taskValue,
     Test / fork := true,
     // zstd-jniがネイティブライブラリを読み込むため
     Test / javaOptions += "--enable-native-access=ALL-UNNAMED",
@@ -45,12 +45,14 @@ lazy val root = project
     run / connectInput := true,
     assembly / mainClass := Some("dev.capslock.z3s.Main"),
     assembly / assemblyJarName := "z3s.jar",
-    assembly / packageOptions += Package.ManifestAttributes("Enable-Native-Access" -> "ALL-UNNAMED"),
+    assembly / packageOptions += Package.ManifestAttributes(
+      "Enable-Native-Access" -> "ALL-UNNAMED"
+    ),
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", "versions", _, "module-info.class") => MergeStrategy.discard
-      case "module-info.class"                                         => MergeStrategy.discard
-      case PathList("META-INF", "io.netty.versions.properties")        => MergeStrategy.first
-      case x =>
+      case "module-info.class"                                      => MergeStrategy.discard
+      case PathList("META-INF", "io.netty.versions.properties")     => MergeStrategy.first
+      case x                                                        =>
         val old = (assembly / assemblyMergeStrategy).value
         old(x)
     }

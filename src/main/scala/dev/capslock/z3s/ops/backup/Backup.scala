@@ -3,15 +3,16 @@ package dev.capslock.z3s.ops.backup
 import cats.effect.IO
 import cats.syntax.all.*
 import dev.capslock.z3s.*
-import dev.capslock.z3s.age.{Age, X25519Recipient}
+import dev.capslock.z3s.age.{ Age, X25519Recipient }
 import dev.capslock.z3s.codec.header.HeaderCodec
 import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
-import dev.capslock.z3s.ops.{OpsContext, Tree}
+import dev.capslock.z3s.ops.{ OpsContext, Tree }
 import dev.capslock.z3s.ops.reindex.Reindex
-import fs2.{Chunk, Stream}
+import fs2.{ Chunk, Stream }
 import java.nio.file.Path
 import java.time.format.DateTimeFormatter
 import scodec.bits.ByteVector
+
 
 final case class BackupOptions(
     full: Boolean,
@@ -26,28 +27,35 @@ final case class BackupOptions(
   /** age暗号化はfile keyを保存しないと再開できないため、再開の対象にしない */
   def isResumable: Boolean = stateDir.isDefined && (mode match
     case SendMode.Raw                         => true
-    case SendMode.Plain(_, Encryption.None) => true
+    case SendMode.Plain(_, Encryption.None)   => true
     case SendMode.Plain(_, Encryption.Age(_)) => false)
 
   /** --recursiveで木の中の1つのdatasetを送るときの設定を返す。子孫は呼び出し元が1つずつ処理するので、recursiveを外す */
-  def forTreeMember(snapshot: String, mode: SendMode): BackupOptions =
-    copy(snapshot = Some(snapshot), mode = mode, recursive = false)
+  def forTreeMember(snapshot: String, mode: SendMode): BackupOptions = copy(
+    snapshot = Some(snapshot),
+    mode = mode,
+    recursive = false,
+  )
+
 
 /** backupサブコマンドを処理する。スナップショットをzfs sendで送ってS3にアップロードし、インデックスに加える */
 private[ops] final class Backup(ctx: OpsContext):
-  import ctx.{common, err, now, out, progress, store, zfs}
+  import ctx.{ common, err, now, out, progress, store, zfs }
 
   private type HostInfo = (zfsVersion: Option[ZfsVersion], properties: Map[String, PropertyValue])
 
   def backup(opts: BackupOptions): IO[Unit] =
     val resumeNotice = opts.stateDir match
       case Some(dir) if opts.isResumable => out(s"resume state directory: $dir")
-      case Some(dir) if opts.recursive =>
+      case Some(dir) if opts.recursive   =>
         out(s"resume state directory: $dir (not used for age-encrypted backups)")
       case Some(_) => out("resume: not available for age-encrypted backups")
       case None    => IO.unit
 
-    resumeNotice *> (if opts.recursive then backupTree(opts) else backupDataset(opts, autoFull = false))
+    resumeNotice *> (if opts.recursive then backupTree(opts) else backupDataset(
+      opts,
+      autoFull = false,
+    ))
 
   /** 子孫のdatasetを親から順にバックアップする。失敗したdatasetがあっても残りを続け、最後にまとめて報告する */
   private def backupTree(opts: BackupOptions): IO[Unit] =
@@ -55,7 +63,11 @@ private[ops] final class Backup(ctx: OpsContext):
       datasets <- zfs.listDatasets(common.dataset)
       rootLocals <- zfs.listSnapshots(common.dataset)
       // zfs snapshot -rで作った同じ時点のスナップショットを揃えるため、送る名前はrootで決める
-      rootSnapshot <- Planner.selectTarget(rootLocals, common.snapshotPrefix, opts.snapshot).liftTo[IO]
+      rootSnapshot <- Planner.selectTarget(
+        rootLocals,
+        common.snapshotPrefix,
+        opts.snapshot,
+      ).liftTo[IO]
       _ <- out(s"recursive backup of ${datasets.size} dataset(s) at @${rootSnapshot.shortName}")
       results <- datasets.zipWithIndex.traverse { (ds, i) =>
         backupTreeMember(ds, s"[${i + 1}/${datasets.size}]", rootSnapshot.shortName, opts)
@@ -68,25 +80,31 @@ private[ops] final class Backup(ctx: OpsContext):
       ds: DatasetInfo,
       position: String,
       snapshot: String,
-      opts: BackupOptions
+      opts: BackupOptions,
   ): IO[Option[Tree.Failure]] =
     // ZFSネイティブ暗号化されたdatasetは、平文で送らないようにrawにする
     val mode = if ds.nativeEncrypted then SendMode.Raw else opts.mode
-    val note = if ds.nativeEncrypted && opts.mode != SendMode.Raw then " (encrypted; sending raw)" else ""
+    val note = if ds.nativeEncrypted
+      && opts.mode != SendMode.Raw then " (encrypted; sending raw)" else ""
     val child = Backup(ctx.forDataset(ds.name))
     val childOpts = opts.forTreeMember(snapshot, mode)
     val run =
       for
         locals <- zfs.listSnapshots(ds.name)
         _ <-
-          if locals.exists(_.shortName == snapshot) then child.backupDataset(childOpts, autoFull = true)
+          if locals.exists(_.shortName == snapshot) then child.backupDataset(
+            childOpts,
+            autoFull = true,
+          )
           else err(s"warning: ${ds.name} has no snapshot @$snapshot; skipping")
       yield ()
 
-    out(s"== $position ${ds.name}$note") *> run.attempt.flatMap {
+    out(s"== $position ${ds.name}$note") *> run.attempt.flatMap:
       case Right(()) => IO.pure(None)
-      case Left(e)   => err(s"error: ${ds.name}: ${e.getMessage}").as(Some((dataset = ds.name, error = e)))
-    }
+      case Left(e)   => err(s"error: ${ds.name}: ${e.getMessage}").as(
+        Some((dataset = ds.name, error = e))
+      )
+  end backupTreeMember
 
   /** @param autoFull trueなら、S3にバックアップが1つもないdatasetをfullで送る */
   private def backupDataset(opts: BackupOptions, autoFull: Boolean): IO[Unit] =
@@ -95,29 +113,35 @@ private[ops] final class Backup(ctx: OpsContext):
       target <- Planner.selectTarget(locals, common.snapshotPrefix, opts.snapshot).liftTo[IO]
       index <- Reindex(ctx).loadOrCreateIndex
       full = opts.full || (autoFull && index.entries.isEmpty)
-      _ <- out(s"no backups of ${common.dataset} on S3; sending a full stream").whenA(full && !opts.full)
+      _ <- out(s"no backups of ${common.dataset} on S3; sending a full stream").whenA(
+        full && !opts.full
+      )
       plan <- Planner
         .planBackup(locals, common.snapshotPrefix, target, index, full, opts.mode.kind)
         .liftTo[IO]
       _ <- plan match
-        case BackupPlan.UpToDate(s) => out(s"${s.name} is already backed up")
+        case BackupPlan.UpToDate(s)  => out(s"${s.name} is already backed up")
         case BackupPlan.Steps(steps) =>
           for
             _ <- out(s"plan: ${steps.size} object(s) in ${opts.mode.kind.label} mode")
             host <- hostInfo
-            _ <- steps.zipWithIndex.traverse_((s, i) => sendOne(s, opts, host, s"[${i + 1}/${steps.size}]"))
+            _ <- steps.zipWithIndex.traverse_((s, i) =>
+              sendOne(s, opts, host, s"[${i + 1}/${steps.size}]")
+            )
           yield ()
     yield ()
 
   /** ヘッダに記録するZFSのバージョンとdatasetのプロパティ。プロパティはsnapshotではなくdatasetの今の値。
-    * ストリームには含めない(`zfs send -p`は使わない)ので、restoreでは自動で設定されない。
-    * バージョンを取得できない古いZFSでは、警告を出してバージョンなしで送る
-    */
+   *  ストリームには含めない(`zfs send -p`は使わない)ので、restoreでは自動で設定されない。
+   *  バージョンを取得できない古いZFSでは、警告を出してバージョンなしで送る
+   */
   private def hostInfo: IO[HostInfo] =
     for
       version <- zfs.version.attempt.flatMap {
         case Right(v) => IO.pure(Some(v))
-        case Left(e)  => err(s"warning: cannot get the ZFS version; not recording it: ${e.getMessage}").as(None)
+        case Left(e)  => err(
+          s"warning: cannot get the ZFS version; not recording it: ${e.getMessage}"
+        ).as(None)
       }
       properties <- zfs.properties(common.dataset)
     yield (zfsVersion = version, properties = properties)
@@ -126,7 +150,7 @@ private[ops] final class Backup(ctx: OpsContext):
       step: SendStep,
       opts: BackupOptions,
       host: HostInfo,
-      position: String
+      position: String,
   ): IO[Unit] =
     val raw = opts.mode == SendMode.Raw
     val parentName = step.parent.map(_.name)
@@ -148,7 +172,7 @@ private[ops] final class Backup(ctx: OpsContext):
         partSize = Some(partSize),
         zfsVersion = host.zfsVersion,
         properties = Some(host.properties),
-        snapshotProperties = Some(snapshotProperties)
+        snapshotProperties = Some(snapshotProperties),
       )
       headerLength = HeaderCodec.encode(header).length
       _ <- IO
@@ -167,8 +191,17 @@ private[ops] final class Backup(ctx: OpsContext):
       _ <- out(s"  ${ZfsCommands.show(ZfsCommands.send(step.child.name, parentName, raw))}")
       _ <-
         if common.dryRun then IO.unit
-        else upload(key, step.child, header, parentName, partSize, opts, s"$position ${step.child.name}")
+        else upload(
+          key,
+          step.child,
+          header,
+          parentName,
+          partSize,
+          opts,
+          s"$position ${step.child.name}",
+        )
     yield ()
+  end sendOne
 
   private def upload(
       key: String,
@@ -177,10 +210,12 @@ private[ops] final class Backup(ctx: OpsContext):
       parentName: Option[String],
       partSize: Long,
       opts: BackupOptions,
-      label: String
+      label: String,
   ): IO[Unit] =
     val states = opts.stateDir.filter(_ => opts.isResumable).map(StateStore(_, progress.log))
-    val metadata = Map("z3s-format" -> Frame.CurrentVersion.toString) ++ parentName.map("z3s-parent" -> _)
+    val metadata = Map("z3s-format" -> Frame.CurrentVersion.toString) ++ parentName.map(
+      "z3s-parent" -> _
+    )
     val raw = opts.mode == SendMode.Raw
     for
       _ <- store.head(key).flatMap {
@@ -191,9 +226,11 @@ private[ops] final class Backup(ctx: OpsContext):
       // 再開する場合は、中断前のヘッダ(createdAtを含む)とパートサイズを使って同じバイト列を作る
       (headerBytes, effectiveHeader, effectivePartSize) <- resume match
         case Some(r) =>
-          HeaderCodec.decode(r.state.header.toArray).leftMap(Z3SError.Runtime(_)).liftTo[IO].map { h =>
-            (r.state.header.toArray, h, r.state.partSize)
-          }
+          HeaderCodec
+            .decode(r.state.header.toArray)
+            .leftMap(Z3SError.Runtime(_))
+            .liftTo[IO]
+            .map { h => (r.state.header.toArray, h, r.state.partSize) }
         case None => IO.pure((HeaderCodec.encode(header), header, partSize.toInt))
       _ <- IO
         .raiseError(Z3SError.Runtime(s"header is too large: ${headerBytes.length} bytes"))
@@ -205,17 +242,19 @@ private[ops] final class Backup(ctx: OpsContext):
         .send(header.snapshot, parentName, raw)
         .through(progress.track(label, Some(effectiveHeader.estimatedSize), counters.describe))
       payload <- opts.mode match
-        case SendMode.Raw => IO.pure(send)
+        case SendMode.Raw         => IO.pure(send)
         case SendMode.Plain(c, e) =>
           val compressed = send.through(Compressors.compress(c))
           e match
-            case Encryption.None => IO.pure(compressed)
+            case Encryption.None    => IO.pure(compressed)
             case Encryption.Age(rs) =>
               rs.traverse(X25519Recipient.parse)
                 .leftMap(Z3SError.Usage(_))
                 .liftTo[IO]
                 .map(recipients =>
-                  (Stream.chunk(Chunk.array(ctx.sha256(headerBytes))) ++ compressed).through(Age.encrypt(recipients))
+                  (Stream.chunk(Chunk.array(ctx.sha256(headerBytes))) ++ compressed).through(
+                    Age.encrypt(recipients)
+                  )
                 )
       result <- ctx.uploader.upload(
         common.bucket,
@@ -227,16 +266,23 @@ private[ops] final class Backup(ctx: OpsContext):
         Stream.chunk(Chunk.byteVector(frame)) ++ payload,
         states,
         resume,
-        counters
+        counters,
       )
       uploadedAt <- now
       _ <- out(s"uploaded $key (${result.size} bytes)")
-      _ <- savePartDigests(snapshot, PartDigests(effectivePartSize.toLong, result.size, result.partMd5s))
+      _ <- savePartDigests(
+        snapshot,
+        PartDigests(effectivePartSize.toLong, result.size, result.partMd5s),
+      )
       entry = IndexEntry(key, effectiveHeader, result.size, result.etag, uploadedAt.toString)
       _ <- ctx.indexStore.update(_.upsert(entry)).void.adaptError { case e =>
-        Z3SError.Runtime(s"$key was uploaded, but updating the index failed (${e.getMessage}); run `z3s reindex`", e)
+        Z3SError.Runtime(
+          s"$key was uploaded, but updating the index failed (${e.getMessage}); run `z3s reindex`",
+          Some(e),
+        )
       }
     yield ()
+  end upload
 
   /** 失敗してもバックアップ自体は使えるので、警告にとどめる。一覧がなくても、オブジェクト全体を読めばETagと照合できる */
   private def savePartDigests(snapshot: Snapshot, digests: PartDigests): IO[Unit] =
@@ -246,36 +292,46 @@ private[ops] final class Backup(ctx: OpsContext):
       .handleErrorWith(e => err(s"warning: failed to save the part MD5s to $key: ${e.getMessage}"))
 
   /** 中断したuploadの状態があり、同じスナップショットとmodeなら再開する。そうでなければ古いuploadをabortする */
-  private def prepareResume(states: StateStore, key: String, header: Header, noResume: Boolean): IO[Option[Resume]] =
-    states.load(common.bucket, key).flatMap {
-      case None => IO.pure(None)
-      case Some(state) =>
-        val mismatch: Option[String] =
-          if noResume then Some("--no-resume was given")
-          else
-            HeaderCodec.decode(state.header.toArray) match
-              case Left(e) => Some(e)
-              case Right(h) if h.guid != header.guid || h.parent != header.parent || h.mode != header.mode =>
-                Some("the snapshot or the mode differs")
-              case Right(_) => None
-        mismatch match
-          case Some(reason) =>
-            progress.log(s"discarding interrupted upload ${state.uploadId} of $key ($reason)") *>
-              store
-                .abortMultipartUpload(key, state.uploadId)
-                .handleErrorWith(e => progress.log(s"warning: failed to abort ${state.uploadId}: ${e.getMessage}")) *>
-              states.delete(common.bucket, key).as(None)
-          case None =>
-            store.listParts(key, state.uploadId).flatMap {
-              case None =>
-                progress.log(s"interrupted upload ${state.uploadId} of $key no longer exists; starting over") *>
-                  states.delete(common.bucket, key).as(None)
-              case Some(parts) =>
-                progress
-                  .log(
-                    s"resuming upload ${state.uploadId} of $key: " +
-                      s"${parts.size} parts on S3, ${state.parts.size} parts recorded"
-                  )
-                  .as(Some(Resume(state, parts)))
-            }
-    }
+  private def prepareResume(
+      states: StateStore,
+      key: String,
+      header: Header,
+      noResume: Boolean,
+  ): IO[Option[Resume]] = states.load(common.bucket, key).flatMap:
+    case None        => IO.pure(None)
+    case Some(state) =>
+      val mismatch: Option[String] =
+        if noResume then Some("--no-resume was given")
+        else
+          HeaderCodec.decode(state.header.toArray) match
+            case Left(e) => Some(e)
+            case Right(h) if h.guid != header.guid
+              || h.parent != header.parent
+              || h.mode != header.mode =>
+              Some("the snapshot or the mode differs")
+            case Right(_) => None
+      mismatch match
+        case Some(reason) =>
+          progress.log(s"discarding interrupted upload ${state.uploadId} of $key ($reason)") *>
+            store
+              .abortMultipartUpload(key, state.uploadId)
+              .handleErrorWith(e =>
+                progress.log(s"warning: failed to abort ${state.uploadId}: ${e.getMessage}")
+              ) *>
+            states.delete(common.bucket, key).as(None)
+        case None =>
+          store.listParts(key, state.uploadId).flatMap:
+            case None =>
+              progress.log(
+                s"interrupted upload ${state.uploadId} of $key no longer exists; starting over"
+              ) *>
+                states.delete(common.bucket, key).as(None)
+            case Some(parts) =>
+              progress
+                .log(
+                  s"resuming upload ${state.uploadId} of $key: " +
+                    s"${parts.size} parts on S3, ${state.parts.size} parts recorded"
+                )
+                .as(Some(Resume(state, parts)))
+      end match
+end Backup

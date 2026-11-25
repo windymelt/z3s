@@ -1,16 +1,17 @@
 package dev.capslock.z3s
 
 import cats.data.NonEmptyList
-import cats.effect.{IO, Ref}
+import cats.effect.{ IO, Ref }
 import dev.capslock.z3s.age.X25519Identity
 import dev.capslock.z3s.codec.header.HeaderCodec
 import dev.capslock.z3s.codec.index.IndexCodec
 import dev.capslock.z3s.codec.partdigests.PartDigestsCodec
-import dev.capslock.z3s.ops.{BackupOptions, Ops, RestoreOptions}
-import java.nio.file.{Files, Path}
+import dev.capslock.z3s.ops.{ BackupOptions, Ops, RestoreOptions }
+import java.nio.file.{ Files, Path }
 import scala.concurrent.duration.Duration
 import scala.jdk.CollectionConverters.*
 import scodec.bits.ByteVector
+
 
 /** 中断したバックアップの再開を、フェイクのzfsとS3で確かめる */
 class ResumeSuite extends IOSpec:
@@ -31,22 +32,36 @@ class ResumeSuite extends IOSpec:
     yield
       val zfs = FakeZfs(ds, 12 * MiB)
       val store = InMemoryStore()
-      val common = Common("bucket", "backups/", dataset, None, dryRun = false, concurrency = 1)
+      val common = Common(
+        "bucket",
+        "backups/",
+        dataset,
+        None,
+        dryRun = false,
+        concurrency = 1,
+      )
       Env(zfs, store, Ops(common, zfs, store, Duration.Zero), dir, StateStore(dir, _ => IO.unit))
 
-  def backup(e: Env, mode: SendMode, noResume: Boolean = false): IO[Unit] =
-    e.ops.backup(BackupOptions(full = true, Some("daily-1"), mode, None, noResume, Some(e.dir)))
+  def backup(e: Env, mode: SendMode, noResume: Boolean = false): IO[Unit] = e.ops.backup(
+    BackupOptions(
+      full = true,
+      Some("daily-1"),
+      mode,
+      None,
+      noResume,
+      Some(e.dir),
+    )
+  )
 
   /** 3パート目以降のUploadPartを失敗させて中断し、失敗のエラーを返す */
   def interrupt(e: Env, mode: SendMode): IO[Throwable] =
     e.store.failPartsFrom.set(Some(3)) *> backup(e, mode).attempt.map(_.left.value) <*
       e.store.failPartsFrom.set(None) <* e.store.uploadPartCalls.set(Nil)
 
-  def stateFiles(dir: Path): IO[List[Path]] =
-    IO.blocking(Files.list(dir).iterator.asScala.toList)
+  def stateFiles(dir: Path): IO[List[Path]] = IO.blocking(Files.list(dir).iterator.asScala.toList)
 
   for (name, mode) <- List("raw" -> raw, "plain without encryption" -> plain) do
-    test(s"an interrupted $name backup resumes without uploading finished parts again") {
+    test(s"an interrupted $name backup resumes without uploading finished parts again"):
       for
         e <- env
         error <- interrupt(e, mode)
@@ -54,28 +69,43 @@ class ResumeSuite extends IOSpec:
         _ <- backup(e, mode)
         resent <- e.store.uploadPartCalls.get
         aborted <- e.store.aborted.get
-        index <- e.store.getWithEtag("backups/tank/data/.z3s-index.cbor").map(o => IndexCodec.decode(o.value._1))
+        index <- e.store
+          .getWithEtag("backups/tank/data/.z3s-index.cbor")
+          .map(o => IndexCodec.decode(o.value._1))
         left <- stateFiles(e.dir)
-        _ <- e.ops.restore(RestoreOptions("daily-1", Some("pool/r"), force = false, None))
+        _ <- e.ops.restore(
+          RestoreOptions(
+            "daily-1",
+            Some("pool/r"),
+            force = false,
+            None,
+          )
+        )
         received <- e.zfs.received.get
         objects <- e.store.objects.get
       yield
         error.getMessage should include("injected failure for part 3")
-        saved.value.parts.map(_.number) should === (List(1, 2))
-        resent should === (List(3))
-        aborted should === (Nil)
+        saved.value.parts.map(_.number) should ===(List(1, 2))
+        resent should ===(List(3))
+        aborted should ===(Nil)
         // 再開したバックアップは、中断前のヘッダ(createdAtを含む)をそのまま使う
-        HeaderCodec.encode(index.value.entries.head.header).toSeq should === (saved.value.header.toSeq)
-        left should === (Nil)
-        received.map(_._2.toList) should === (List(e.zfs.streamFor(snapshot, None, mode == raw).toList))
+        HeaderCodec.encode(index.value.entries.head.header).toSeq should ===(
+          saved.value.header.toSeq
+        )
+        left should ===(Nil)
+        received.map(_._2.toList) should ===(
+          List(e.zfs.streamFor(snapshot, None, mode == raw).toList)
+        )
         // 送り直さなかったパートのMD5も、中断前の記録から一覧に入る
-        val digests = PartDigestsCodec.decode(objects("backups/tank/data/.z3s-parts/daily-1.cbor").bytes).value
-        digests.partMd5s should === (objects(objectKey).bytes.grouped(5 * MiB).toList.map(p =>
+        val digests = PartDigestsCodec.decode(
+          objects("backups/tank/data/.z3s-parts/daily-1.cbor").bytes
+        ).value
+        digests.partMd5s should ===(objects(objectKey).bytes.grouped(5 * MiB).toList.map(p =>
           Md5(ByteVector(java.security.MessageDigest.getInstance("MD5").digest(p)))
         ))
-    }
+  end for
 
-  test("an interrupted age-encrypted backup is aborted and leaves no state") {
+  test("an interrupted age-encrypted backup is aborted and leaves no state"):
     for
       id <- X25519Identity.generate
       e <- env
@@ -86,16 +116,23 @@ class ResumeSuite extends IOSpec:
       files <- stateFiles(e.dir)
     yield
       aborted should have size 1
-      pending should === (Map.empty[String, e.store.PendingUpload])
-      files should === (Nil)
-  }
+      pending should ===(Map.empty[String, e.store.PendingUpload])
+      files should ===(Nil)
 
-  test("a part that differs from the record aborts the upload, and the next run starts over") {
+  test("a part that differs from the record aborts the upload, and the next run starts over"):
     for
       e <- env
       _ <- interrupt(e, raw)
       saved <- e.states.load("bucket", objectKey)
-      _ <- e.states.save(saved.value.copy(parts = saved.value.parts.map(_.copy(md5 = Md5(ByteVector.low(16))))))
+      _ <- e.states.save(
+        saved.value.copy(
+          parts = saved.value.parts.map(
+            _.copy(
+              md5 = Md5(ByteVector.low(16))
+            )
+          )
+        )
+      )
       mismatch <- backup(e, raw).attempt
       aborted <- e.store.aborted.get
       afterMismatch <- stateFiles(e.dir)
@@ -105,38 +142,41 @@ class ResumeSuite extends IOSpec:
       inside(mismatch.left.value) { case u: Z3SError.Unresumable =>
         u.getMessage should include("differs from the interrupted upload")
       }
-      aborted should === (List(saved.value.uploadId))
-      afterMismatch should === (Nil)
-      sent should === (List(1, 2, 3))
-  }
+      aborted should ===(List(saved.value.uploadId))
+      afterMismatch should ===(Nil)
+      sent should ===(List(1, 2, 3))
 
-  test("--no-resume discards the interrupted upload and starts over") {
+  test("--no-resume discards the interrupted upload and starts over"):
     for
       e <- env
       _ <- interrupt(e, raw)
       saved <- e.states.load("bucket", objectKey)
-      _ <- backup(e, raw, noResume = true)
+      _ <- backup(
+        e,
+        raw,
+        noResume = true,
+      )
       aborted <- e.store.aborted.get
       sent <- e.store.uploadPartCalls.get
     yield
-      aborted should === (List(saved.value.uploadId))
-      sent should === (List(1, 2, 3))
-  }
+      aborted should ===(List(saved.value.uploadId))
+      sent should ===(List(1, 2, 3))
 
-  test("a different mode discards the interrupted upload") {
+  test("a different mode discards the interrupted upload"):
     for
       e <- env
       _ <- interrupt(e, raw)
       saved <- e.states.load("bucket", objectKey)
       _ <- backup(e, plain)
       aborted <- e.store.aborted.get
-      index <- e.store.getWithEtag("backups/tank/data/.z3s-index.cbor").map(o => IndexCodec.decode(o.value._1))
+      index <- e.store
+        .getWithEtag("backups/tank/data/.z3s-index.cbor")
+        .map(o => IndexCodec.decode(o.value._1))
     yield
-      aborted should === (List(saved.value.uploadId))
-      index.value.entries.map(_.header.mode) should === (List(plain))
-  }
+      aborted should ===(List(saved.value.uploadId))
+      index.value.entries.map(_.header.mode) should ===(List(plain))
 
-  test("an upload removed from S3 is started over") {
+  test("an upload removed from S3 is started over"):
     for
       e <- env
       _ <- interrupt(e, raw)
@@ -146,35 +186,43 @@ class ResumeSuite extends IOSpec:
       sent <- e.store.uploadPartCalls.get
       files <- stateFiles(e.dir)
     yield
-      sent should === (List(1, 2, 3))
-      files should === (Nil)
-  }
+      sent should ===(List(1, 2, 3))
+      files should ===(Nil)
 
-  test("state files round trip, their removal is logged, and unreadable ones are ignored") {
+  test("state files round trip, their removal is logged, and unreadable ones are ignored"):
     for
       dir <- IO.blocking(Files.createTempDirectory("z3s-state"))
       logs <- Ref.of[IO, List[String]](Nil)
       states = StateStore(dir, m => logs.update(_ :+ m))
-      state = UploadState("b", "k", "id", 5 * MiB, ByteVector(1, 2, 3), List(PartRecord(1, Md5(ByteVector.fill(16)(0xab)), 5L * MiB)))
+      state = UploadState(
+        "b",
+        "k",
+        "id",
+        5 * MiB,
+        ByteVector(1, 2, 3),
+        List(PartRecord(1, Md5(ByteVector.fill(16)(0xab)), 5L * MiB)),
+      )
       _ <- states.save(state)
       saved <- IO.blocking(Files.readString(states.path("b", "k")))
       loaded <- states.load("b", "k")
       other <- states.load("b", "other")
       _ <- IO.blocking(Files.writeString(states.path("b", "k"), "{broken"))
       broken <- states.load("b", "k")
-      _ <- IO.blocking(Files.writeString(states.path("b", "k"), saved.replace("ab" * 16, "ab" * 15)))
+      _ <- IO.blocking(
+        Files.writeString(states.path("b", "k"), saved.replace("ab" * 16, "ab" * 15))
+      )
       badMd5 <- states.load("b", "k")
       _ <- states.delete("b", "k")
       messages <- logs.get
     yield
       // MD5は以前と同じく16進の文字列で書く
-      saved should include ("\"md5\":\"" + "ab" * 16 + "\"")
-      loaded should === (Some(state))
-      other should === (None)
-      broken should === (None)
-      badMd5 should === (None)
+      saved should include("\"md5\":\"" + "ab" * 16 + "\"")
+      loaded should ===(Some(state))
+      other should ===(None)
+      broken should ===(None)
+      badMd5 should ===(None)
       messages should have size 3
       messages(0) should startWith("warning: ignoring unreadable resume state")
       messages(1) should startWith("warning: ignoring unreadable resume state")
-      messages(2) should === (s"removed resume state ${states.path("b", "k")}")
-  }
+      messages(2) should ===(s"removed resume state ${states.path("b", "k")}")
+end ResumeSuite

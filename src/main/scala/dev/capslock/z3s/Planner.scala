@@ -3,12 +3,15 @@ package dev.capslock.z3s
 import scala.annotation.tailrec
 import scala.collection.mutable
 
+
 /** 1つのバックアップオブジェクトとして送る差分。parentがNoneならfull */
 final case class SendStep(parent: Option[Snapshot], child: Snapshot)
+
 
 enum BackupPlan:
   case Steps(steps: List[SendStep])
   case UpToDate(snapshot: Snapshot)
+
 
 /** S3とzfsにアクセスせずに行う判断をまとめる */
 object Planner:
@@ -23,14 +26,16 @@ object Planner:
   def selectTarget(
       locals: List[Snapshot],
       snapshotPrefix: Option[String],
-      requested: Option[String]
+      requested: Option[String],
   ): Either[Z3SError, Snapshot] =
     requested match
       case Some(name) =>
         locals.find(_.shortName == name).toRight(Z3SError.Runtime(s"snapshot not found: $name"))
       case None =>
         filterPrefix(locals, snapshotPrefix).lastOption
-          .toRight(Z3SError.Runtime(s"no local snapshot matches prefix ${snapshotPrefix.getOrElse("")}"))
+          .toRight(
+            Z3SError.Runtime(s"no local snapshot matches prefix ${snapshotPrefix.getOrElse("")}")
+          )
 
   def filterPrefix(locals: List[Snapshot], snapshotPrefix: Option[String]): List[Snapshot] =
     snapshotPrefix.fold(locals)(p => locals.filter(_.shortName.startsWith(p)))
@@ -41,10 +46,11 @@ object Planner:
     val memo = mutable.Map.empty[String, Health]
 
     // 子の健全性は親の判定結果から決まる
-    def fromParent(parent: Health): Health = parent match
-      case Health.Ok    => Health.Ok
-      case Health.Cycle => Health.Cycle
-      case _            => Health.ParentBroken
+    def fromParent(parent: Health): Health =
+      parent match
+        case Health.Ok    => Health.Ok
+        case Health.Cycle => Health.Cycle
+        case _            => Health.ParentBroken
 
     // 判定済みのentry、full、または異常のあるentryに着くまで親を辿り、通った経路に結果を書き戻す
     def resolve(start: IndexEntry): Unit =
@@ -55,26 +61,29 @@ object Planner:
       while last.isEmpty do
         memo.get(current.key) match
           case Some(h) => last = Some(fromParent(h))
-          case None =>
+          case None    =>
             path += current
             onPath += current.header.guid
             current.header.parent match
               case None                               => last = Some(Health.Ok)
               case Some(p) if onPath.contains(p.guid) => last = Some(Health.Cycle)
-              case Some(p) =>
+              case Some(p)                            =>
                 byGuid.get(p.guid) match
-                  case None                                                        => last = Some(Health.MissingParent)
-                  case Some(pe) if pe.header.mode.kind != current.header.mode.kind => last = Some(Health.ModeMismatch)
-                  case Some(pe)                                                    => current = pe
+                  case None => last = Some(Health.MissingParent)
+                  case Some(pe) if pe.header.mode.kind != current.header.mode.kind => last = Some(
+                    Health.ModeMismatch
+                  )
+                  case Some(pe) => current = pe
       // memoに当たった場合、lastは経路の末尾のentryの健全性になっている
       var h = last.get
-      path.reverseIterator.foreach { e =>
+      path.reverseIterator.foreach: e =>
         memo(e.key) = h
         h = fromParent(h)
-      }
+    end resolve
 
     index.entries.foreach(e => if !memo.contains(e.key) then resolve(e))
     memo.toMap
+  end health
 
   def planBackup(
       locals: List[Snapshot],
@@ -82,7 +91,7 @@ object Planner:
       target: Snapshot,
       index: Index,
       full: Boolean,
-      mode: ModeKind
+      mode: ModeKind,
   ): Either[Z3SError, BackupPlan] =
     val onS3 = index.entries.map(e => e.header.guid -> e).toMap
     if onS3.contains(target.guid) then
@@ -108,29 +117,42 @@ object Planner:
           else
             val chain = base :: candidates.filter(_.createtxg > base.createtxg) ::: List(target)
             Right(BackupPlan.Steps(chain.zip(chain.tail).map((p, c) => SendStep(Some(p), c))))
+  end planBackup
 
   /** fullから対象までのentryを古い順に返す */
   def restoreChain(index: Index, snapshot: String): Either[Z3SError, List[IndexEntry]] =
     val byGuid = index.entries.groupBy(_.header.guid).view.mapValues(_.head).toMap
 
-    @tailrec def loop(e: IndexEntry, acc: List[IndexEntry], visited: Set[Long]): Either[Z3SError, List[IndexEntry]] =
+    @tailrec def loop(
+        e: IndexEntry,
+        acc: List[IndexEntry],
+        visited: Set[Long],
+    ): Either[Z3SError, List[IndexEntry]] =
       e.header.parent match
-        case None => Right(e :: acc)
+        case None                                => Right(e :: acc)
         case Some(p) if visited.contains(p.guid) =>
           Left(Z3SError.Health(s"cycle detected at ${e.header.snapshot}"))
         case Some(p) =>
           byGuid.get(p.guid) match
-            case None => Left(Z3SError.Health(s"parent ${p.name} of ${e.header.snapshot} is missing on S3"))
+            case None => Left(
+              Z3SError.Health(s"parent ${p.name} of ${e.header.snapshot} is missing on S3")
+            )
             case Some(pe) if pe.header.mode.kind != e.header.mode.kind =>
-              Left(Z3SError.Health(s"mode mismatch between ${pe.header.snapshot} and ${e.header.snapshot}"))
+              Left(
+                Z3SError.Health(
+                  s"mode mismatch between ${pe.header.snapshot} and ${e.header.snapshot}"
+                )
+              )
             case Some(pe) => loop(pe, e :: acc, visited + p.guid)
 
     index.entries.find(_.header.snapshot == snapshot) match
       case None    => Left(Z3SError.Runtime(s"$snapshot is not found in the index"))
       case Some(e) => loop(e, Nil, Set(e.header.guid))
+  end restoreChain
 
   /** 復元先に同じguidのスナップショットがあれば、その次から受信する */
   def remainingToReceive(chain: List[IndexEntry], targetLocals: List[Snapshot]): List[IndexEntry] =
     val localGuids = targetLocals.map(_.guid).toSet
     val last = chain.lastIndexWhere(e => localGuids.contains(e.header.guid))
     chain.drop(last + 1)
+end Planner

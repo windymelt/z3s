@@ -4,6 +4,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 import dev.capslock.z3s.*
 
+
 /** --recursiveの処理が共有する関数 */
 private[ops] object Tree:
   /** 処理に失敗したdatasetとそのエラー */
@@ -11,9 +12,10 @@ private[ops] object Tree:
 
   /** 木の処理で失敗したdatasetをまとめて1つのエラーにする。終了コードは、失敗の終了コードがすべて同じならそれを、異なれば1を使う */
   def raiseFailures(failed: List[Failure], skipped: List[String], total: Int): IO[Unit] =
-    val code = failed.map(_.error).map { case z: Z3SError => z.exitCode; case _ => 1 }.distinct match
-      case List(c) => c
-      case _       => 1
+    val code =
+      failed.map(_.error).map { case z: Z3SError => z.exitCode; case _ => 1 }.distinct match
+        case List(c) => c
+        case _       => 1
     val skippedNote =
       if skipped.isEmpty then "" else s"; skipped because an ancestor failed: ${skipped.mkString(", ")}"
     val message = s"${failed.size} of $total dataset(s) failed: ${failed.map(_.dataset).mkString(", ")}$skippedNote"
@@ -31,11 +33,11 @@ private[ops] object Tree:
       .list(s"${common.prefix}$root")
       .map(_.key.stripPrefix(common.prefix))
       // インデックスのキー(<dataset>/.z3s-index.cbor)とバックアップのキー(<dataset>@<snapshot>)から、datasetの名前を取り出す
-      .collect {
+      .collect:
         case k if k.endsWith(s"/$IndexFileName") => k.stripSuffix(s"/$IndexFileName")
         case k if k.contains('@')                => k.takeWhile(_ != '@')
-      }
       .filter(isInTree)
       .compile
       .toList
       .map(_.distinct.sorted)
+end Tree

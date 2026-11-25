@@ -1,6 +1,7 @@
 package dev.capslock.z3s.codec
 
-import io.bullet.borer.{Reader, Writer}
+import io.bullet.borer.{ Reader, Writer }
+
 
 /** codecが共有する読み書きの補助関数。CBORとJSONのどちらにも使う */
 private[codec] object BorerSupport:
@@ -8,7 +9,10 @@ private[codec] object BorerSupport:
 
   /** 符号なし64ビット値を`Long`のビット列のまま書く */
   def writeU64(w: Writer, v: Long): Writer =
-    if v >= 0 then w.writeLong(v) else w.writeOverLong(negative = false, v)
+    if v >= 0 then w.writeLong(v) else w.writeOverLong(
+      negative = false,
+      v,
+    )
 
   def readU64(r: Reader): Long =
     if r.hasOverLong then r.readOverLong()
@@ -47,3 +51,4 @@ private[codec] object BorerSupport:
     b.result()
 
   def required[A](name: String, v: Option[A]): A = v.getOrElse(fail(s"missing key: $name"))
+end BorerSupport
