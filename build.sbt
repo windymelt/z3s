@@ -16,7 +16,7 @@ lazy val root = project
       "org.scodec" %% "scodec-core" % "2.3.3",
       "io.bullet" %% "borer-core" % "1.18.0",
       "com.monovore" %% "decline-effect" % "2.6.2",
-      "software.amazon.awssdk" % "s3" % "2.57.2",
+      "software.amazon.awssdk" % "s3" % "2.57.13",
       "com.github.luben" % "zstd-jni" % "1.5.7-24",
       "org.tukaani" % "xz" % "1.12",
       "org.apache.commons" % "commons-compress" % "1.28.0",
