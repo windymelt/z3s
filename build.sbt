@@ -10,9 +10,9 @@ lazy val root = project
     scalacOptions ++= Seq("-deprecation", "-feature", "-Wunused:all"),
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-effect" % "3.7.1",
-      "co.fs2" %% "fs2-core" % "3.14.0",
-      "co.fs2" %% "fs2-io" % "3.14.0",
-      "co.fs2" %% "fs2-scodec" % "3.14.0",
+      "co.fs2" %% "fs2-core" % "3.16.0",
+      "co.fs2" %% "fs2-io" % "3.16.0",
+      "co.fs2" %% "fs2-scodec" % "3.16.0",
       "org.scodec" %% "scodec-core" % "2.3.3",
       "io.bullet" %% "borer-core" % "1.18.0",
       "com.monovore" %% "decline-effect" % "2.6.2",
