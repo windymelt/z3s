@@ -14,7 +14,7 @@ lazy val root = project
       "co.fs2" %% "fs2-io" % "3.14.0",
       "co.fs2" %% "fs2-scodec" % "3.14.0",
       "org.scodec" %% "scodec-core" % "2.3.3",
-      "io.bullet" %% "borer-core" % "1.18.0",
+      "io.bullet" %% "borer-core" % "1.19.0",
       "com.monovore" %% "decline-effect" % "2.6.2",
       "software.amazon.awssdk" % "s3" % "2.57.2",
       "com.github.luben" % "zstd-jni" % "1.5.7-24",
